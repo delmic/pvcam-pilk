@@ -33,11 +33,10 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-
 #ifdef CONFIG_USB_DEBUG
-	static int debug = 1;
+  static int debug = 1;
 #else
-	static int debug;
+  static int debug;
 #endif
 /* Use our own dbg macro */
 #undef dbg
@@ -51,18 +50,18 @@ MODULE_PARM_DESC(debug, "Debug enabled or not");
 static void piusb_delete (struct kref *kref);
 int MapUserBuffer( struct IOCTL_STRUCT*, struct device_extension * );
 int UnMapUserBuffer( struct device_extension * );
-static void piusb_write_bulk_callback(struct urb *, struct pt_regs *);
-static void piusb_readPIXEL_callback ( struct urb *, struct pt_regs * );
+static void piusb_write_bulk_callback(struct urb * );
+static void piusb_readPIXEL_callback ( struct urb * );
 
 static int lastErr = 0;
 static int errCnt=0;
 
 
 /**
- *	piusb_probe
+ *  piusb_probe
  *
- *	Called by the usb core when a new device is connected that it thinks
- *	this driver might be interested in.
+ *  Called by the usb core when a new device is connected that it thinks
+ *  this driver might be interested in.
  */
 static int piusb_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
@@ -111,10 +110,10 @@ static int piusb_probe(struct usb_interface *interface, const struct usb_device_
         endpoint = &iface_desc->endpoint[i].desc;
         if( debug )
         {
-    		dbg( "Endpoint[%d]->bDescriptorType = %d", i, endpoint->bDescriptorType );
+        dbg( "Endpoint[%d]->bDescriptorType = %d", i, endpoint->bDescriptorType );
             dbg( "Endpoint[%d]->bEndpointAddress = 0x%02X", i, endpoint->bEndpointAddress );
-    		dbg( "Endpoint[%d]->bbmAttributes = %d", i, endpoint->bmAttributes );
-    		dbg( "Endpoint[%d]->MaxPacketSize = %d\n", i, endpoint->wMaxPacketSize );
+        dbg( "Endpoint[%d]->bbmAttributes = %d", i, endpoint->bmAttributes );
+        dbg( "Endpoint[%d]->MaxPacketSize = %d\n", i, endpoint->wMaxPacketSize );
         }
         if( ( endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK ) == USB_ENDPOINT_XFER_BULK )
         {
@@ -147,7 +146,7 @@ error:
 }
 
 /**
- *	piusb_delete
+ *  piusb_delete
  */
 static void piusb_delete (struct kref *kref)
 {
@@ -160,7 +159,7 @@ static void piusb_delete (struct kref *kref)
 
 
 /**
- *	piusb_open
+ *  piusb_open
  */
 static int piusb_open (struct inode *inode, struct file *file)
 {
@@ -210,7 +209,7 @@ static int piusb_open (struct inode *inode, struct file *file)
 }
 
 /**
- *	piusb_release
+ *  piusb_release
  */
 static int piusb_release (struct inode *inode, struct file *file)
 {
@@ -224,14 +223,14 @@ static int piusb_release (struct inode *inode, struct file *file)
         dbg ("%s - object is NULL", __FUNCTION__ );
         return -ENODEV;
     }
-	/* decrement the count on our device */
+  /* decrement the count on our device */
     kref_put(&pdx->kref, piusb_delete);
     return retval;
 }
 
 
 /**
- *	piusb_ioctl
+ *  piusb_ioctl
  */
 static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -244,7 +243,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
     ioctl_struct ctrl;
     unsigned char *uBuf;
     int numbytes = 0;
-    unsigned short controlData = 0;
+    unsigned short controlData = 0;   
     
     pdx = (struct device_extension *)file->private_data;
     /* verify that the device wasn't unplugged */
@@ -253,7 +252,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
         dbg( "No Device Present\n" );
         return -ENODEV;
     }
-	/* fill in your device specific stuff here */
+  /* fill in your device specific stuff here */
     if( _IOC_DIR( cmd ) & _IOC_READ )
         err = !access_ok( VERIFY_WRITE, (void __user *) arg, _IOC_SIZE( cmd ) );
     else if (_IOC_DIR(cmd) & _IOC_WRITE)
@@ -264,10 +263,10 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
         return -EFAULT;
     }
     switch( cmd )
-	{
+  {
         case PIUSB_GETVNDCMD:
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                info( "copy_from_user failed\n" );
+                pr_info( "copy_from_user failed\n" );
             dbg( "%s %x\n", "Get Vendor Command = ",ctrl.cmd );
             retval = usb_control_msg( pdx->udev, usb_rcvctrlpipe( pdx->udev, 0 ), ctrl.cmd, 
                             USB_DIR_IN, 0, 0, &devRB,  ctrl.numbytes, HZ*10 );
@@ -278,7 +277,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
             return devRB;
         case PIUSB_SETVNDCMD:
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                info( "copy_from_user failed\n" );
+                pr_info( "copy_from_user failed\n" );
 //            dbg( "%s %x", "Set Vendor Command = ",ctrl.cmd );
             controlData = ctrl.pData[0];
             controlData |= ( ctrl.pData[1] << 8 );
@@ -299,7 +298,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
             break;
         case PIUSB_WRITEPIPE:
             if( copy_from_user( &ctrl, (void __user*)arg, _IOC_SIZE( cmd ) ) )
-                info( "copy_from_user WRITE_DUMMY failed\n" );
+                pr_info( "copy_from_user WRITE_DUMMY failed\n" );
             if( !access_ok( VERIFY_READ, ctrl.pData, ctrl.numbytes ) )
             {
                 dbg("can't access pData" );
@@ -310,7 +309,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
             break;
         case PIUSB_USERBUFFER:
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                info( "copy_from_user failed\n" );
+                pr_info( "copy_from_user failed\n" );
             return (MapUserBuffer( (ioctl_struct *) &ctrl, pdx ) );
             break;
         case PIUSB_UNMAP_USERBUFFER:
@@ -319,7 +318,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
             break;
         case PIUSB_READPIPE:
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                info( "copy_from_user failed\n" );
+                pr_info( "copy_from_user failed\n" );
             switch( ctrl.endpoint )
             {
                 case 0://ST133 Pixel Data or PIXIS IO
@@ -347,7 +346,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
                             {
                                 dbg( "CMD = %s, Address = 0x%02X",((uBuf[3] == 0x02) ? "WRITE":"READ" ), uBuf[1] );
                                 dbg( "Number of bytes Attempted to read = %d", (int)ctrl.numbytes );
-                                dbg( "Blocking ReadI/O Failed with status %d", i );
+                                dbg( "Blocking Read I/O Failed with status %d", i );
                                 kfree( uBuf );
                                 return -1;
                             }
@@ -377,7 +376,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
                             ctrl.numbytes = pdx->bulk_in_size_returned;
                             pdx->bulk_in_size_returned -= pdx->frameSize;
                             for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
-                                SetPageDirty( pdx->sgl[pdx->active_frame][i].page );
+                                SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
                             pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
                             return ctrl.numbytes;
                         }
@@ -392,7 +391,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
                         return 0;
                     }
                     numbytes = ctrl.numbytes;
-//					dbg( "numbytes to read = %d", numbytes );
+//          dbg( "numbytes to read = %d", numbytes );
                     if( copy_from_user( uBuf, ctrl.pData, numbytes ) )
                         dbg("copying ctrl.pData to dummyBuf failed" );
                     i = usb_bulk_msg( pdx->udev, pdx->hEP[ctrl.endpoint],uBuf,
@@ -413,7 +412,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
                         return ctrl.numbytes;
                     }
                     break;
-		
+    
                 case 2://PIXIS Ping
                 case 3://PIXIS Pong
                         if( !pdx->gotPixelData )
@@ -424,7 +423,7 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
                             ctrl.numbytes = pdx->bulk_in_size_returned;
                             pdx->bulk_in_size_returned -= pdx->frameSize;
                             for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
-                                SetPageDirty( pdx->sgl[pdx->active_frame][i].page );
+                                SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
                             pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
                             return ctrl.numbytes;
                         }
@@ -434,9 +433,9 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
         case PIUSB_WHATCAMERA:
             return pdx->iama;
         case PIUSB_SETFRAMESIZE:
-            dbg("PIUSB_SETFRAMESIZE");
+            //dbg("PIUSB_SETFRAMESIZE");
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                info( "copy_from_user failed\n" );
+                pr_info( "copy_from_user failed\n" );
             pdx->frameSize = ctrl.numbytes;
             pdx->num_frames = ctrl.numFrames;
             if( !pdx->sgl )
@@ -463,20 +462,21 @@ static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd
 
 
 /**
- *	piusb_disconnect
+ *  piusb_disconnect
  *
- *	Called by the usb core when the device is removed from the system.
+ *  Called by the usb core when the device is removed from the system.
  *
- *	This routine guarantees that the driver will not submit any more urbs
- *	by clearing pdx->udev.  It is also supposed to terminate any currently
- *	active urbs.  Unfortunately, usb_bulk_msg(), used in piusb_read(), does
- *	not provide any way to do this.  But at least we can cancel an active
- *	write.
+ *  This routine guarantees that the driver will not submit any more urbs
+ *  by clearing pdx->udev.  It is also supposed to terminate any currently
+ *  active urbs.  Unfortunately, usb_bulk_msg(), used in piusb_read(), does
+ *  not provide any way to do this.  But at least we can cancel an active
+ *  write.
  */
 static void piusb_disconnect(struct usb_interface *interface)
 {
     struct device_extension *pdx;
     int minor = interface->minor;
+
     lock_kernel( );
     pdx = usb_get_intfdata (interface);
     usb_set_intfdata (interface, NULL);
@@ -490,11 +490,12 @@ static void piusb_disconnect(struct usb_interface *interface)
 }
 
 /**
- *	piusb_init
+ *  piusb_init
  */
 static int __init piusb_init(void)
-{
+{  
     int result;
+    
     /* register this driver with the USB subsystem */
     result = usb_register(&piusb_driver);
     if (result) 
@@ -502,12 +503,12 @@ static int __init piusb_init(void)
         err("usb_register failed. Error number %d", result);
         return result;
     }
-    info("%s: %s",DRIVER_DESC,DRIVER_VERSION);
+    pr_info("%s: %s",DRIVER_DESC,DRIVER_VERSION);
     return 0;
 }
 
 /**
- *	piusb_exit
+ *  piusb_exit
  */
 static void __exit piusb_exit(void)
 {
@@ -520,19 +521,24 @@ int piusb_output( ioctl_struct *io, unsigned char *uBuf,int len, struct device_e
     struct urb *urb = NULL;
     int err = 0;
     unsigned char *kbuf = NULL;
-	
+          
     urb = usb_alloc_urb( 0, GFP_KERNEL );
     if( urb != NULL )
-    {
-        kbuf = usb_buffer_alloc( pdx->udev, len, GFP_KERNEL, &urb->transfer_dma );
-        if( !kbuf)
-        {
-            info( "buffer_alloc failed\n" );
-            return -ENOMEM;
-        }
-        memcpy( kbuf, uBuf, len );
+    {        
+        kbuf = kmalloc(len, GFP_KERNEL);                                  
+        if (kbuf == NULL) 
+        {                                                      
+            pr_info("kmalloc failed for pisub_output\n");        
+            return -ENOMEM;                                           
+        }                                                                 
+        if(copy_from_user(kbuf, uBuf, len)) 
+        {                           
+            pr_info("copy_from_user failed for pisub_output\n");        
+            return -EFAULT;                                           
+        }                                                                 
+              
         usb_fill_bulk_urb( urb, pdx->udev, pdx->hEP[io->endpoint], kbuf, len, piusb_write_bulk_callback, pdx );
-        urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+        
         err = usb_submit_urb( urb, GFP_KERNEL );
         if( err )
         {
@@ -548,6 +554,7 @@ int UnMapUserBuffer( struct device_extension *pdx )
     int i = 0;
     int k = 0;
     unsigned int epAddr;
+    
     for( k = 0; k < pdx->num_frames; k++ )
     {
         dbg("Killing Urbs for Frame %d", k );
@@ -582,7 +589,7 @@ int UnMapUserBuffer( struct device_extension *pdx )
         usb_buffer_unmap_sg( pdx->udev, epAddr, pdx->sgl[k], pdx->maplist_numPagesMapped[k] );
         for( i = 0; i < pdx->maplist_numPagesMapped[k]; i++ )
         {
-            page_cache_release( pdx->sgl[k][i].page );
+            page_cache_release( sg_page(&(pdx->sgl[k][i])) );
         }
         kfree( pdx->sgl[k] );
         kfree( pdx->PixelUrb[k] );
@@ -604,18 +611,18 @@ int UnMapUserBuffer( struct device_extension *pdx )
     return 0;
 }
 /* MapUserBuffer(
-	inputs:
-	ioctl_struct *io - structure containing user address, frame #, and size
-	struct device_extension *pdx - the PIUSB device extension
-	returns:
-	int - status of the task
-	Notes:
-	MapUserBuffer maps a buffer passed down through an ioctl.  The user buffer is Page Aligned by the app
-	and then passed down.  The function get_free_pages(...) does the actual mapping of the buffer from user space to 
-	kernel space.  From there a scatterlist is created from all the pages.  The next function called is to usb_buffer_map_sg
-	which allocated DMA addresses for each page, even coalescing them if possible.  The DMA address is placed in the scatterlist
-	structure.  The function returns the number of DMA addresses.  This may or may not be equal to the number of pages that 
-	the user buffer uses.  We then build an URB for each DMA address and then submit them.
+  inputs:
+  ioctl_struct *io - structure containing user address, frame #, and size
+  struct device_extension *pdx - the PIUSB device extension
+  returns:
+  int - status of the task
+  Notes:
+  MapUserBuffer maps a buffer passed down through an ioctl.  The user buffer is Page Aligned by the app
+  and then passed down.  The function get_free_pages(...) does the actual mapping of the buffer from user space to 
+  kernel space.  From there a scatterlist is created from all the pages.  The next function called is to usb_buffer_map_sg
+  which allocated DMA addresses for each page, even coalescing them if possible.  The DMA address is placed in the scatterlist
+  structure.  The function returns the number of DMA addresses.  This may or may not be equal to the number of pages that 
+  the user buffer uses.  We then build an URB for each DMA address and then submit them.
 */
 //int MapUserBuffer( unsigned long uaddr, unsigned long numbytes, unsigned long frameInfo, struct device_extension *pdx )
 int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
@@ -633,7 +640,7 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
     frameInfo = io->numFrames;
     uaddr = (unsigned long) io->pData;
     numbytes = io->numbytes;
-    
+ 
     if( pdx->iama == PIXIS_PID ) //if so, which EP should we map this frame to
     {
         if( frameInfo % 2 )//check to see if this should use EP4(PONG)
@@ -657,14 +664,14 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
     //number of pages to map the entire user space DMA buffer
     numPagesRequired = ((uaddr & ~PAGE_MASK) + count + ~PAGE_MASK) >> PAGE_SHIFT;
     dbg("Number of pages needed = %d", numPagesRequired );
-    maplist_p = vmalloc( numPagesRequired * sizeof(struct page));//, GFP_ATOMIC);
+    maplist_p = vmalloc( numPagesRequired * sizeof(struct page*));//, GFP_ATOMIC);
     if (!maplist_p)
     {
         dbg( "Can't Allocate Memory for maplist_p" );
         return -ENOMEM;
     }
-	//map the user buffer to kernel memory
-    down_write( &current->mm->mmap_sem );	
+  //map the user buffer to kernel memory
+    down_write( &current->mm->mmap_sem ); 
     pdx->maplist_numPagesMapped[frameInfo] = get_user_pages( current,
                                                             current->mm,
                                                             (uaddr & PAGE_MASK), 
@@ -683,7 +690,7 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         vfree( maplist_p );
         return -ENOMEM;
     }
-	//need to create a scatterlist that spans each frame that can fit into the mapped buffer
+    //need to create a scatterlist that spans each frame that can fit into the mapped buffer
     pdx->sgl[frameInfo] = kmalloc( ( pdx->maplist_numPagesMapped[frameInfo] * sizeof( struct scatterlist ) ), GFP_ATOMIC );
     if( !pdx->sgl[frameInfo] )
     {
@@ -691,7 +698,9 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         dbg("can't allocate mem for sgl");
         return -ENOMEM;
     }
-    pdx->sgl[frameInfo][0].page = maplist_p[0];
+    
+    sg_init_table( pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );    
+    sg_assign_page(&(pdx->sgl[frameInfo][0]), maplist_p[0]);    
     pdx->sgl[frameInfo][0].offset = uaddr & ~PAGE_MASK;
     if (pdx->maplist_numPagesMapped[frameInfo] > 1)
     {
@@ -699,21 +708,30 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         count -= pdx->sgl[frameInfo][0].length;
         for (k=1; k < pdx->maplist_numPagesMapped[frameInfo] ; k++)
         {
-            pdx->sgl[frameInfo][k].offset = 0;
-            pdx->sgl[frameInfo][k].page = maplist_p[k];
+            sg_assign_page(&(pdx->sgl[frameInfo][k]), maplist_p[k]);
+            pdx->sgl[frameInfo][k].offset = 0;            
             pdx->sgl[frameInfo][k].length = ( count < PAGE_SIZE ) ? count : PAGE_SIZE;
-            count -= PAGE_SIZE; //example had PAGE_SIZE here;
+            count -= PAGE_SIZE; //example had PAGE_SIZE here;            
         }
     }
     else
     {
         pdx->sgl[frameInfo][0].length = count;
     }
-    pdx->sgEntries[frameInfo] = usb_buffer_map_sg( pdx->udev, epAddr, pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );
+      
+    pdx->sgEntries[frameInfo] = usb_buffer_map_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );    
     dbg("number of sgEntries = %d", pdx->sgEntries[frameInfo] );
-    pdx->userBufMapped = 1;
     vfree( maplist_p );
-	//Create and Send the URB's for each s/g entry	
+    
+    if ( pdx->sgEntries[frameInfo] == 0 )
+    {
+        pr_info( "usb_buffer_map_sg failed" );
+        return -EFAULT;
+    }
+    
+    pdx->userBufMapped = 1;
+    
+    //Create and Send the URB's for each s/g entry  
     pdx->PixelUrb[frameInfo] = kmalloc( pdx->sgEntries[frameInfo] * sizeof( struct urb *), GFP_KERNEL);
     if( !pdx->PixelUrb[frameInfo] )
     {
@@ -726,7 +744,7 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         usb_fill_bulk_urb( pdx->PixelUrb[frameInfo][i], 
                     pdx->udev, 
                     epAddr,
-                    (dma_addr_t*)sg_dma_address( &pdx->sgl[frameInfo][i] ), 
+                    (void*) (unsigned long) sg_dma_address( &pdx->sgl[frameInfo][i] ), 
                     sg_dma_len( &pdx->sgl[frameInfo][i] ), 
                     piusb_readPIXEL_callback, 
                     (void *)pdx );
@@ -753,26 +771,27 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
 }
 
 /**
- *	piusb_write_bulk_callback
+ *  piusb_write_bulk_callback
  */
-static void piusb_write_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void piusb_write_bulk_callback (struct urb *urb)
 {
     struct device_extension *pdx = (struct device_extension *)urb->context;
     
     /* sync/async unlink faults aren't errors */
     if (urb->status && !(urb->status == -ENOENT || urb->status == -ECONNRESET)) 
-        {
+    {
         dbg("%s - nonzero write bulk status received: %d",
             __FUNCTION__, urb->status);
     }
     pdx->pendingWrite = 0;
-    usb_buffer_free( urb->dev, urb->transfer_buffer_length, urb->transfer_buffer, urb->transfer_dma );
+    kfree(urb->transfer_buffer);                                              
 }
 
-static void piusb_readPIXEL_callback ( struct urb *urb, struct pt_regs *regs )
+static void piusb_readPIXEL_callback ( struct urb *urb )
 {
     int i=0;
     struct device_extension *pdx  = ( struct device_extension *) urb->context;
+    
     if( urb->status && !( urb->status == -ENOENT || urb->status == -ECONNRESET ) )
     {
         dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
