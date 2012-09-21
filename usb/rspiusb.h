@@ -100,7 +100,7 @@ static struct file_operations piusb_fops = {
 	 * or should the open() function fail.
 	 */
 	.owner =	THIS_MODULE,
-	.ioctl =	piusb_ioctl,
+	.unlocked_ioctl =	piusb_ioctl, // XXX
 	.open =		piusb_open,
 	.release =	piusb_release,
 };

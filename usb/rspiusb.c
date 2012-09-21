@@ -4,7 +4,6 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <linux/smp_lock.h>
 #include <linux/completion.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
@@ -477,12 +476,12 @@ static void piusb_disconnect(struct usb_interface *interface)
     struct device_extension *pdx;
     int minor = interface->minor;
 
-    lock_kernel( );
+    //lock_kernel( ); // XXX
     pdx = usb_get_intfdata (interface);
     usb_set_intfdata (interface, NULL);
     /* give back our minor */
     usb_deregister_dev (interface, &piusb_class);
-    unlock_kernel( );
+    //unlock_kernel( ); // XXX how do the other drivers? => own lock? no lock?
     /* prevent device read, write and ioctl */
     pdx->present = 0;
     kref_put( &pdx->kref, piusb_delete );
@@ -586,7 +585,8 @@ int UnMapUserBuffer( struct device_extension *pdx )
         {
             epAddr = pdx->hEP[0];
         }
-        usb_buffer_unmap_sg( pdx->udev, epAddr, pdx->sgl[k], pdx->maplist_numPagesMapped[k] );
+        //usb_buffer_unmap_sg( pdx->udev, epAddr, pdx->sgl[k], pdx->maplist_numPagesMapped[k] );
+        dma_unmap_sg( pdx->udev->bus->controller, pdx->sgl[k], pdx->maplist_numPagesMapped[k], DMA_FROM_DEVICE);
         for( i = 0; i < pdx->maplist_numPagesMapped[k]; i++ )
         {
             page_cache_release( sg_page(&(pdx->sgl[k][i])) );
@@ -719,7 +719,8 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         pdx->sgl[frameInfo][0].length = count;
     }
       
-    pdx->sgEntries[frameInfo] = usb_buffer_map_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );    
+    //pdx->sgEntries[frameInfo] = usb_buffer_map_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );
+    pdx->sgEntries[frameInfo] = dma_map_sg( pdx->udev->bus->controller, pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo], DMA_FROM_DEVICE);  
     dbg("number of sgEntries = %d", pdx->sgEntries[frameInfo] );
     vfree( maplist_p );
     
