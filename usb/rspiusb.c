@@ -548,6 +548,79 @@ int piusb_output( ioctl_struct *io, unsigned char *uBuf,int len, struct device_e
     }
     return -EINPROGRESS;
 }
+
+// Next 2 functions are directly from core/usb.c, where they have been
+// disabled because there is no user in-kernel.
+// A possibility would be to use directly dma_(un)map_sg.
+
+/**
+ * usb_buffer_map_sg - create scatterlist DMA mapping(s) for an endpoint
+ * @dev: device to which the scatterlist will be mapped
+ * @is_in: mapping transfer direction
+ * @sg: the scatterlist to map
+ * @nents: the number of entries in the scatterlist
+ *
+ * Return value is either < 0 (indicating no buffers could be mapped), or
+ * the number of DMA mapping array entries in the scatterlist.
+ *
+ * The caller is responsible for placing the resulting DMA addresses from
+ * the scatterlist into URB transfer buffer pointers, and for setting the
+ * URB_NO_TRANSFER_DMA_MAP transfer flag in each of those URBs.
+ *
+ * Top I/O rates come from queuing URBs, instead of waiting for each one
+ * to complete before starting the next I/O.   This is particularly easy
+ * to do with scatterlists.  Just allocate and submit one URB for each DMA
+ * mapping entry returned, stopping on the first error or when all succeed.
+ * Better yet, use the usb_sg_*() calls, which do that (and more) for you.
+ *
+ * This call would normally be used when translating scatterlist requests,
+ * rather than usb_buffer_map(), since on some hardware (with IOMMUs) it
+ * may be able to coalesce mappings for improved I/O efficiency.
+ *
+ * Reverse the effect of this call with usb_buffer_unmap_sg().
+ */
+int usb_buffer_map_sg(const struct usb_device *dev, int is_in,
+		      struct scatterlist *sg, int nents)
+{
+	struct usb_bus		*bus;
+	struct device		*controller;
+
+	if (!dev
+			|| !(bus = dev->bus)
+			|| !(controller = bus->controller)
+			|| !controller->dma_mask)
+		return -EINVAL;
+
+	/* FIXME generic api broken like pci, can't report errors */
+	return dma_map_sg(controller, sg, nents,
+			is_in ? DMA_FROM_DEVICE : DMA_TO_DEVICE) ? : -ENOMEM;
+}
+
+/**
+ * usb_buffer_unmap_sg - free DMA mapping(s) for a scatterlist
+ * @dev: device to which the scatterlist will be mapped
+ * @is_in: mapping transfer direction
+ * @sg: the scatterlist to unmap
+ * @n_hw_ents: the positive return value from usb_buffer_map_sg
+ *
+ * Reverses the effect of usb_buffer_map_sg().
+ */
+void usb_buffer_unmap_sg(const struct usb_device *dev, int is_in,
+			 struct scatterlist *sg, int n_hw_ents)
+{
+	struct usb_bus		*bus;
+	struct device		*controller;
+
+	if (!dev
+			|| !(bus = dev->bus)
+			|| !(controller = bus->controller)
+			|| !controller->dma_mask)
+		return;
+
+	dma_unmap_sg(controller, sg, n_hw_ents,
+			is_in ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
+}
+
 int UnMapUserBuffer( struct device_extension *pdx )
 {
     int i = 0;
@@ -585,8 +658,8 @@ int UnMapUserBuffer( struct device_extension *pdx )
         {
             epAddr = pdx->hEP[0];
         }
-        //usb_buffer_unmap_sg( pdx->udev, epAddr, pdx->sgl[k], pdx->maplist_numPagesMapped[k] );
-        dma_unmap_sg( pdx->udev->bus->controller, pdx->sgl[k], pdx->maplist_numPagesMapped[k], DMA_FROM_DEVICE);
+        usb_buffer_unmap_sg( pdx->udev, epAddr, pdx->sgl[k], pdx->maplist_numPagesMapped[k] );
+        //dma_unmap_sg( pdx->udev->bus->controller, pdx->sgl[k], pdx->maplist_numPagesMapped[k], DMA_FROM_DEVICE);
         for( i = 0; i < pdx->maplist_numPagesMapped[k]; i++ )
         {
             page_cache_release( sg_page(&(pdx->sgl[k][i])) );
@@ -719,8 +792,8 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         pdx->sgl[frameInfo][0].length = count;
     }
       
-    //pdx->sgEntries[frameInfo] = usb_buffer_map_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );
-    pdx->sgEntries[frameInfo] = dma_map_sg( pdx->udev->bus->controller, pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo], DMA_FROM_DEVICE);  
+    pdx->sgEntries[frameInfo] = usb_buffer_map_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );
+    //pdx->sgEntries[frameInfo] = dma_map_sg( pdx->udev->bus->controller, pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo], DMA_FROM_DEVICE);  
     dbg("number of sgEntries = %d", pdx->sgEntries[frameInfo] );
     vfree( maplist_p );
     
