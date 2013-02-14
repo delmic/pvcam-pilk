@@ -736,6 +736,7 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
     int i = 0;
     int k = 0;
     int err = 0;
+    int ret;
     struct page **maplist_p;
     int numPagesRequired;
     frameInfo = io->numFrames;
@@ -820,18 +821,19 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         pdx->sgl[frameInfo][0].length = count;
     }
       
-    pdx->sgEntries[frameInfo] = usb_buffer_map_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );
-    //pdx->sgEntries[frameInfo] = dma_map_sg( pdx->udev->bus->controller, pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo], DMA_FROM_DEVICE);  
+    //ret = dma_map_sg( pdx->udev->bus->controller, pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo], DMA_FROM_DEVICE);
+    // + check for ret == 0
+    ret = usb_buffer_map_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );
+	if (ret < 0) {
+		vfree(maplist_p);
+		pr_info( "usb_buffer_map_sg failed" );
+		return -EINVAL;
+	}
+
+	pdx->sgEntries[frameInfo] = ret;
     dbg("number of sgEntries = %d", pdx->sgEntries[frameInfo] );
-    vfree( maplist_p );
-    
-    if ( pdx->sgEntries[frameInfo] == 0 )
-    {
-        pr_info( "usb_buffer_map_sg failed" );
-        return -EFAULT;
-    }
-    
     pdx->userBufMapped = 1;
+    vfree( maplist_p );
     
     //Create and Send the URB's for each s/g entry  
     pdx->PixelUrb[frameInfo] = kmalloc( pdx->sgEntries[frameInfo] * sizeof( struct urb *), GFP_KERNEL);
