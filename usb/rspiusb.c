@@ -5,6 +5,7 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/completion.h>
+#include <linux/mutex.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
 #include <asm/scatterlist.h>
@@ -55,6 +56,9 @@ static void piusb_readPIXEL_callback ( struct urb * );
 static int lastErr = 0;
 static int errCnt=0;
 
+/* prevent races between open() and disconnect() */
+static DEFINE_MUTEX(disconnect_sem); // XXX never used
+static DEFINE_MUTEX(ioctl_mutex); // FIXME: should be per device (-> device extension)
 
 /**
  *  piusb_probe
@@ -245,12 +249,16 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
     unsigned short controlData = 0;   
     
     pdx = (struct device_extension *)file->private_data;
+    mutex_lock(&ioctl_mutex);
     /* verify that the device wasn't unplugged */
     if (!pdx->present) 
         {
         dbg( "No Device Present\n" );
+        mutex_unlock(&ioctl_mutex);
         return -ENODEV;
     }
+
+
   /* fill in your device specific stuff here */
     if( _IOC_DIR( cmd ) & _IOC_READ )
         err = !access_ok( VERIFY_WRITE, (void __user *) arg, _IOC_SIZE( cmd ) );
@@ -259,6 +267,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
     if( err )
     {
         printk( KERN_INFO "return with error = %d\n", err );
+        mutex_unlock(&ioctl_mutex);
         return -EFAULT;
     }
     switch( cmd )
@@ -273,6 +282,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
             {
                 dbg( "FW Version returned from HW = %ld.%ld", (devRB>>8),(devRB&0xFF) );
             }
+            mutex_unlock(&ioctl_mutex);
             return devRB;
         case PIUSB_SETVNDCMD:
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
@@ -290,9 +300,11 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                             &dummyCtlBuf, 
                             ctrl.numbytes, 
                             HZ*10 );
+            mutex_unlock(&ioctl_mutex);
             return retval;
             break;
         case PIUSB_ISHIGHSPEED:
+        	mutex_unlock(&ioctl_mutex);
             return ( ( pdx->udev->speed == USB_SPEED_HIGH ) ? 1 : 0 );
             break;
         case PIUSB_WRITEPIPE:
@@ -304,15 +316,18 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                 return 0;
             }
             piusb_output( &ctrl, ctrl.pData/*uBuf*/, ctrl.numbytes, pdx );
+            mutex_unlock(&ioctl_mutex);
             return ctrl.numbytes;
             break;
         case PIUSB_USERBUFFER:
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
                 pr_info( "copy_from_user failed\n" );
+            mutex_unlock(&ioctl_mutex);
             return (MapUserBuffer( (ioctl_struct *) &ctrl, pdx ) );
             break;
         case PIUSB_UNMAP_USERBUFFER:
             UnMapUserBuffer( pdx );
+            mutex_unlock(&ioctl_mutex);
             return 0;
             break;
         case PIUSB_READPIPE:
@@ -329,6 +344,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                         if( !uBuf )
                         {
                             dbg("Alloc for uBuf failed" );
+                            mutex_unlock(&ioctl_mutex);
                             return 0;
                         }
                         numbytes = ctrl.numbytes;
@@ -347,6 +363,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                                 dbg( "Number of bytes Attempted to read = %d", (int)ctrl.numbytes );
                                 dbg( "Blocking Read I/O Failed with status %d", i );
                                 kfree( uBuf );
+                                mutex_unlock(&ioctl_mutex);
                                 return -1;
                             }
                             else
@@ -363,6 +380,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                         if( copy_to_user( (ioctl_struct *)arg, &ctrl, sizeof( ioctl_struct ) ) )
                             dbg("copy_to_user failed in IORB" );
                         kfree( uBuf );
+                        mutex_unlock(&ioctl_mutex);
                         return ctrl.numbytes;
                     }
                     else //ST133 Pixel Data
@@ -377,6 +395,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                             for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
                                 SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
                             pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
+                            mutex_unlock(&ioctl_mutex);
                             return ctrl.numbytes;
                         }
                     }
@@ -387,6 +406,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                     if( !uBuf )
                     {
                         dbg("Alloc for uBuf failed" );
+                        mutex_unlock(&ioctl_mutex);
                         return 0;
                     }
                     numbytes = ctrl.numbytes;
@@ -399,6 +419,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                     {
                         dbg( "Blocking ReadI/O Failed with status %d", i );
                         kfree( uBuf );
+                        mutex_unlock(&ioctl_mutex);
                         return -1;
                     }
                     else
@@ -408,14 +429,17 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                         if( copy_to_user( (ioctl_struct *)arg, &ctrl, sizeof( ioctl_struct ) ) )
                             dbg("copy_to_user failed in IORB" );
                         kfree( uBuf );
+                        mutex_unlock(&ioctl_mutex);
                         return ctrl.numbytes;
                     }
                     break;
     
                 case 2://PIXIS Ping
                 case 3://PIXIS Pong
-                        if( !pdx->gotPixelData )
+                        if( !pdx->gotPixelData ) {
+                        	mutex_unlock(&ioctl_mutex);
                             return 0;
+                        }
                         else
                         {
                             pdx->gotPixelData = 0;
@@ -424,12 +448,14 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                             for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
                                 SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
                             pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
+                            mutex_unlock(&ioctl_mutex);
                             return ctrl.numbytes;
                         }
                         break;
             }
             break;
         case PIUSB_WHATCAMERA:
+        	mutex_unlock(&ioctl_mutex);
             return pdx->iama;
         case PIUSB_SETFRAMESIZE:
             //dbg("PIUSB_SETFRAMESIZE");
@@ -447,6 +473,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                 pdx->maplist_numPagesMapped = vmalloc( sizeof( unsigned int ) * pdx->num_frames );
             if( !pdx->pendedPixelUrbs )
                 pdx->pendedPixelUrbs = kmalloc( sizeof( char *) * pdx->num_frames, GFP_KERNEL );
+            mutex_unlock(&ioctl_mutex);
             return 0;
         default:
             dbg( "%s\n", "No IOCTL found" );
@@ -455,6 +482,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
     }
     /* return that we did not understand this ioctl call */
     dbg( "Returning -ENOTTY" );
+    mutex_unlock(&ioctl_mutex);
     return -ENOTTY;
 }
 

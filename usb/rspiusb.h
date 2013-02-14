@@ -32,8 +32,7 @@
 #else
 #define PIUSB_MINOR_BASE    192
 #endif
-/* prevent races between open() and disconnect() */
-static DECLARE_MUTEX (disconnect_sem);
+
 /* local function prototypes */
 /* Structure to hold all of our device specific stuff */
 struct device_extension {
