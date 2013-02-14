@@ -1,3 +1,4 @@
+# Warning: make sure there is not space in the path (pwd)
 TARGET = rspiusb
 OBJS = rspiusb.o
 MDIR = drivers/misc
@@ -11,11 +12,11 @@ DEST = /lib/modules/$(CURRENT)/kernel/$(MDIR)
 obj-m      := $(TARGET).o
 
 rspiusb:
-	make -C $(KDIR) SUBDIRS=$(PWD)
+	make -C $(KDIR) SUBDIRS="$(PWD)"
 
 
 default:
-	make -C $(KDIR) SUBDIRS=$(PWD) modules
+	make -C $(KDIR) SUBDIRS="$(PWD)" modules
 
 $(TARGET).o: $(OBJS)
 	$(LD) $(LD_RFLAG) -r -o $@ $(OBJS)

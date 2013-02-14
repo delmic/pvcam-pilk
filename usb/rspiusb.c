@@ -231,7 +231,7 @@ static int piusb_release (struct inode *inode, struct file *file)
 /**
  *  piusb_ioctl
  */
-static int piusb_ioctl (struct inode *inode, struct file *file, unsigned int cmd, unsigned long arg)
+static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct device_extension *pdx;
     char dummyCtlBuf[] = {0,0,0,0,0,0,0,0};

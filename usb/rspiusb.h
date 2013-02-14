@@ -73,7 +73,7 @@ typedef struct IOCTL_STRUCT
     unsigned char *     pData;
 }ioctl_struct;
 
-static int 	piusb_ioctl			(struct inode *inode, struct file *file, unsigned int cmd, unsigned long arg);
+static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg);
 static int 	piusb_open			(struct inode *inode, struct file *file);
 static int 	piusb_release			(struct inode *inode, struct file *file);
 static int 	piusb_probe			(struct usb_interface *interface, const struct usb_device_id *id);
