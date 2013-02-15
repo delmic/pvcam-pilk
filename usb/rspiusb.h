@@ -58,7 +58,7 @@ struct device_extension {
     int                     num_frames;     /* the number of frames that will fit in the user buffer */
     int                     active_frame;
     unsigned long           frameSize;
-    struct semaphore        sem;
+    struct semaphore        sem; // FIXME: never used
     //FX2 specific endpoints
     unsigned int        hEP[8];
 };

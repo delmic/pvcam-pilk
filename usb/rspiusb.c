@@ -56,8 +56,6 @@ static void piusb_readPIXEL_callback ( struct urb * );
 static int lastErr = 0;
 static int errCnt=0;
 
-/* prevent races between open() and disconnect() */
-static DEFINE_MUTEX(disconnect_sem); // XXX never used
 static DEFINE_MUTEX(ioctl_mutex); // FIXME: should be per device (-> device extension)
 
 /**
@@ -207,7 +205,7 @@ static int piusb_open (struct inode *inode, struct file *file)
     kref_get(&pdx->kref);
     /* save our object in the file's private structure */
     file->private_data = pdx;
-    exit_no_device:
+exit_no_device:
     return retval;
 }
 
@@ -287,17 +285,18 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
         case PIUSB_SETVNDCMD:
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
                 pr_info( "copy_from_user failed\n" );
-//            dbg( "%s %x", "Set Vendor Command = ",ctrl.cmd );
+            dbg( "%s %x", "Set Vendor Command = ",ctrl.cmd );
             controlData = ctrl.pData[0];
             controlData |= ( ctrl.pData[1] << 8 );
-//            dbg( "%s %d", "Vendor Data =",controlData );
+            dbg( "%s %d", "Vendor Data =",controlData );
             retval = usb_control_msg( pdx->udev, 
                             usb_sndctrlpipe( pdx->udev, 0 ),
                             ctrl.cmd, 
                             (USB_DIR_OUT | USB_TYPE_VENDOR ),/* | USB_RECIP_ENDPOINT), */
                             controlData, 
                             0, 
-                            &dummyCtlBuf, 
+                            //&dummyCtlBuf, // FIXME: really? pointer to a array pointer?!
+                            dummyCtlBuf,
                             ctrl.numbytes, 
                             HZ*10 );
             mutex_unlock(&ioctl_mutex);
@@ -322,8 +321,9 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
         case PIUSB_USERBUFFER:
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
                 pr_info( "copy_from_user failed\n" );
+            err = MapUserBuffer( (ioctl_struct *) &ctrl, pdx );
             mutex_unlock(&ioctl_mutex);
-            return (MapUserBuffer( (ioctl_struct *) &ctrl, pdx ) );
+            return err;
             break;
         case PIUSB_UNMAP_USERBUFFER:
             UnMapUserBuffer( pdx );
@@ -504,14 +504,14 @@ static void piusb_disconnect(struct usb_interface *interface)
     struct device_extension *pdx;
     int minor = interface->minor;
 
-    //lock_kernel( ); // XXX
+    mutex_lock(&ioctl_mutex);
     pdx = usb_get_intfdata (interface);
     usb_set_intfdata (interface, NULL);
     /* give back our minor */
     usb_deregister_dev (interface, &piusb_class);
-    //unlock_kernel( ); // XXX how do the other drivers? => own lock? no lock?
     /* prevent device read, write and ioctl */
     pdx->present = 0;
+    mutex_unlock(&ioctl_mutex);
     kref_put( &pdx->kref, piusb_delete );
     dbg("PI USB2.0 device #%d now disconnected\n", minor);
 }
@@ -618,6 +618,8 @@ int usb_buffer_map_sg(const struct usb_device *dev, int is_in,
 			|| !(controller = bus->controller)
 			|| !controller->dma_mask)
 		return -EINVAL;
+	pr_info( "usb_buffer_map_sg: controller=%p, sg=%p, nents=%d, is_in=%d",
+			controller, sg, nents, is_in);
 
 	/* FIXME generic api broken like pci, can't report errors */
 	return dma_map_sg(controller, sg, nents,
@@ -855,7 +857,7 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         pdx->PixelUrb[frameInfo][i]->transfer_dma = sg_dma_address( &pdx->sgl[frameInfo][i] );
         pdx->PixelUrb[frameInfo][i]->transfer_flags = URB_NO_TRANSFER_DMA_MAP | URB_NO_INTERRUPT;
     }
-    pdx->PixelUrb[frameInfo][--i]->transfer_flags &= ~URB_NO_INTERRUPT;  //only interrupt when last URB completes
+    pdx->PixelUrb[frameInfo][i-1]->transfer_flags &= ~URB_NO_INTERRUPT;  //only interrupt when last URB completes
     pdx->pendedPixelUrbs[frameInfo] = kmalloc( ( pdx->sgEntries[frameInfo] * sizeof( char ) ), GFP_KERNEL );
     if( !pdx->pendedPixelUrbs[frameInfo] )
         dbg( "Can't allocate Memory for pendedPixelUrbs" );
@@ -864,12 +866,12 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         err = usb_submit_urb( pdx->PixelUrb[frameInfo][i], GFP_ATOMIC );
         if( err )
         {
-            dbg( "%s %d\n", "submit urb error =", err );
+            dbg( "submit urb for entry %d error = %d\n", i, err);
             pdx->pendedPixelUrbs[frameInfo][i] = 0;
             return err;
         }
         else
-            pdx->pendedPixelUrbs[frameInfo][i] = 1;;
+            pdx->pendedPixelUrbs[frameInfo][i] = 1;
     }
     return 0;
 }
