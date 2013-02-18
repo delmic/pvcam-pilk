@@ -54,6 +54,7 @@ struct device_extension {
     int                     gotPixelData;
     int                     pendingWrite;
     char**                  pendedPixelUrbs;
+    unsigned char **		user_buffer;
     int                     iama;           /*PIXIS or ST133 */
     int                     num_frames;     /* the number of frames that will fit in the user buffer */
     int                     active_frame;
@@ -61,6 +62,7 @@ struct device_extension {
     struct semaphore        sem; // FIXME: never used
     //FX2 specific endpoints
     unsigned int        hEP[8];
+    int			        maxp[8];
 };
 typedef struct IOCTL_STRUCT
 {
