@@ -116,9 +116,9 @@ static int piusb_probe(struct usb_interface *interface, const struct usb_device_
         dbg( "Endpoint[%d]->bbmAttributes = %d", i, endpoint->bmAttributes );
         dbg( "Endpoint[%d]->MaxPacketSize = %d\n", i, endpoint->wMaxPacketSize );
         }
-        if( ( endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK ) == USB_ENDPOINT_XFER_BULK )
+        if(usb_endpoint_xfer_bulk(endpoint))
         {
-            if( endpoint->bEndpointAddress & USB_DIR_IN )
+            if(usb_endpoint_dir_in(endpoint))
                 pdx->hEP[i] = usb_rcvbulkpipe( pdx->udev, endpoint->bEndpointAddress );
             else
                 pdx->hEP[i] = usb_sndbulkpipe( pdx->udev, endpoint->bEndpointAddress );
@@ -331,6 +331,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
             return 0;
             break;
         case PIUSB_READPIPE:
+        	//dbg("PIUSB_READPIPE"); // called constantly from the user-space side when acquiring
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
                 pr_info( "copy_from_user failed\n" );
             switch( ctrl.endpoint )
@@ -458,11 +459,11 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
         	mutex_unlock(&ioctl_mutex);
             return pdx->iama;
         case PIUSB_SETFRAMESIZE:
-            //dbg("PIUSB_SETFRAMESIZE");
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
                 pr_info( "copy_from_user failed\n" );
             pdx->frameSize = ctrl.numbytes;
             pdx->num_frames = ctrl.numFrames;
+            dbg("PIUSB_SETFRAMESIZE to %dx%lu", ctrl.numFrames, ctrl.numbytes);
             if( !pdx->sgl )
                 pdx->sgl = kmalloc( sizeof ( struct scatterlist *) * pdx->num_frames, GFP_KERNEL );
             if( !pdx->sgEntries )
@@ -688,7 +689,7 @@ int UnMapUserBuffer( struct device_extension *pdx )
         {
             epAddr = pdx->hEP[0];
         }
-        usb_buffer_unmap_sg( pdx->udev, epAddr, pdx->sgl[k], pdx->maplist_numPagesMapped[k] );
+        usb_buffer_unmap_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[k], pdx->maplist_numPagesMapped[k] );
         //dma_unmap_sg( pdx->udev->bus->controller, pdx->sgl[k], pdx->maplist_numPagesMapped[k], DMA_FROM_DEVICE);
         for( i = 0; i < pdx->maplist_numPagesMapped[k]; i++ )
         {
@@ -774,6 +775,7 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         dbg( "Can't Allocate Memory for maplist_p" );
         return -ENOMEM;
     }
+    // Note: this is similar to videobuf2-dma-contig.c vb2_dc_get_userptr()
   //map the user buffer to kernel memory
     down_write( &current->mm->mmap_sem ); 
     pdx->maplist_numPagesMapped[frameInfo] = get_user_pages( current,
@@ -785,15 +787,16 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
                                                             maplist_p, 
                                                             NULL );
     up_write(&current->mm->mmap_sem );
-    dbg( "Number of pages mapped = %d", pdx->maplist_numPagesMapped[frameInfo] );
-    for( i=0; i < pdx->maplist_numPagesMapped[frameInfo]; i++ )
-        flush_dcache_page(maplist_p[i]);
-    if( !pdx->maplist_numPagesMapped[frameInfo] )
+    if( numPagesRequired != pdx->maplist_numPagesMapped[frameInfo] )
     {
         dbg( "get_user_pages() failed" );
         vfree( maplist_p );
+        // TODO: put_page
         return -ENOMEM;
     }
+    dbg( "Number of pages mapped = %d", pdx->maplist_numPagesMapped[frameInfo] );
+    for( i=0; i < pdx->maplist_numPagesMapped[frameInfo]; i++ )
+        flush_dcache_page(maplist_p[i]);
     //need to create a scatterlist that spans each frame that can fit into the mapped buffer
     pdx->sgl[frameInfo] = kmalloc( ( pdx->maplist_numPagesMapped[frameInfo] * sizeof( struct scatterlist ) ), GFP_ATOMIC );
     if( !pdx->sgl[frameInfo] )
@@ -863,7 +866,8 @@ int MapUserBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         dbg( "Can't allocate Memory for pendedPixelUrbs" );
     for( i = 0; i < pdx->sgEntries[frameInfo]; i++ )
     {
-        err = usb_submit_urb( pdx->PixelUrb[frameInfo][i], GFP_ATOMIC );
+        //err = usb_submit_urb( pdx->PixelUrb[frameInfo][i], GFP_ATOMIC );
+        err = usb_submit_urb( pdx->PixelUrb[frameInfo][i], GFP_KERNEL );
         if( err )
         {
             dbg( "submit urb for entry %d error = %d\n", i, err);
