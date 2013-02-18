@@ -464,6 +464,20 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 								if (copy_to_user(to_buf, buf, length))
 									dbg("failed to copy pixel data of urb %d to user", i);
 								to_buf += length;
+
+								// resubmitting the urb if it must
+								err = usb_submit_urb( urbs[i], GFP_KERNEL ); //resubmit the URB
+								if( err && err != -EPERM )
+								{
+									errCnt++;
+									if( err != lastErr )
+									{
+										dbg("submit urb in callback failed with error code %d", -err );
+										lastErr = err;
+									}
+								} else if (err == -EPERM)
+									dbg("submit urb in callback failed, due to shutdown" );
+
                             }
                             // DEBUG
 //                            for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
@@ -1101,7 +1115,6 @@ static void piusb_write_bulk_callback (struct urb *urb)
     if (urb->status) {
     	if ( urb->status == -ENOENT || urb->status == -ECONNRESET || urb->status == -ESHUTDOWN) {
 			dbg("urb write failed, due to status = %d", -urb->status);
-			return; // no hope to do anything more with the hardware
     	} else {
     		dbg("%s - nonzero write bulk status received: %d",
     				__FUNCTION__, urb->status);
@@ -1133,7 +1146,7 @@ static void piusb_readPIXEL_callback ( struct urb *urb )
     }
 
 	pdx->bulk_in_byte_trk += urb->actual_length;
-	dbg("Read %d bytes from bulk so far", pdx->bulk_in_byte_trk);
+    dbg("Read %d bytes from bulk so far", pdx->bulk_in_byte_trk);
 
 	pdx->urbIdx++;  //point to next URB when we callback
 	if( pdx->bulk_in_byte_trk >= pdx->frameSize )
@@ -1143,27 +1156,27 @@ static void piusb_readPIXEL_callback ( struct urb *urb )
 		pdx->gotPixelData = 1;
 		pdx->frameIdx = ( ( pdx->frameIdx + 1 ) % pdx->num_frames );
 		pdx->urbIdx = 0;
-		dbg("We got a whole pixel data");
 	}
+
+	// You cannot submit it here, because the data hasn't been copied yet
 
 	// Apparently the user interface expects us to keep listening to the
 	// camera until the buffer is unmapped. So resubmit the same URB to
 	// keep filling the cyclic buffer. (Unless it has been trying to stop)
 	// eg urb->status == -ENOENT means UnMapBuffer has been called
-	if (!urb->status) {
-		err = usb_submit_urb( urb, GFP_ATOMIC ); //resubmit the URB
-		if( err && err != -EPERM )
-		{
-			errCnt++;
-			if( err != lastErr )
-			{
-				dbg("submit urb in callback failed with error code %d", -err );
-				lastErr = err;
-			}
-			return;
-		} else if (err == -EPERM)
-			dbg("submit urb in callback failed, due to shutdown" );
-	}
+//	if (!urb->status) {
+//		err = usb_submit_urb( urb, GFP_ATOMIC ); //resubmit the URB
+//		if( err && err != -EPERM )
+//		{
+//			errCnt++;
+//			if( err != lastErr )
+//			{
+//				dbg("submit urb in callback failed with error code %d", -err );
+//				lastErr = err;
+//			}
+//			return;
+//		} else if (err == -EPERM)
+//			dbg("submit urb in callback failed, due to shutdown" );
 } 
 
 module_init ( piusb_init );
