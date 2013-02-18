@@ -192,7 +192,7 @@ static int piusb_open (struct inode *inode, struct file *file)
     
     pdx->frameIdx = pdx->urbIdx = 0;
     pdx->gotPixelData = 0;
-    pdx->pendingWrite = 0;
+    pdx->pendingWrite = 0; // FIXME: never read
     pdx->frameSize = 0;
     pdx->num_frames = 0;
     pdx->active_frame = 0;
@@ -289,20 +289,20 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
                 pr_info( "copy_from_user failed\n" );
             dbg( "%s %x", "Set Vendor Command = ",ctrl.cmd );
-            controlData = ctrl.pData[0];
-            controlData |= ( ctrl.pData[1] << 8 );
+            controlData = ( ctrl.pData[1] << 8 ) | ctrl.pData[0];
             dbg( "%s %d", "Vendor Data =",controlData );
-            retval = usb_control_msg( pdx->udev, 
+            retval = usb_control_msg( pdx->udev,
                             usb_sndctrlpipe( pdx->udev, 0 ),
-                            ctrl.cmd, 
+                            ctrl.cmd,
                             (USB_DIR_OUT | USB_TYPE_VENDOR ),/* | USB_RECIP_ENDPOINT), */
-                            controlData, 
-                            0, 
-                            //&dummyCtlBuf, // FIXME: really? pointer to a array pointer?!
+                            controlData,
+                            0,
+//                            &dummyCtlBuf, // FIXME: really? pointer to a array pointer?!
                             dummyCtlBuf,
-                            ctrl.numbytes, 
+                            ctrl.numbytes,
                             HZ*10 );
             mutex_unlock(&ioctl_mutex);
+            dbg( "control msg returned %d", retval);
             return retval;
             break;
         case PIUSB_ISHIGHSPEED:
@@ -310,6 +310,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
             return ( ( pdx->udev->speed == USB_SPEED_HIGH ) ? 1 : 0 );
             break;
         case PIUSB_WRITEPIPE:
+        	dbg("PIUSB_WRITEPIPE");
             if( copy_from_user( &ctrl, (void __user*)arg, _IOC_SIZE( cmd ) ) )
                 pr_info( "copy_from_user WRITE_DUMMY failed\n" );
             if( !access_ok( VERIFY_READ, ctrl.pData, ctrl.numbytes ) )
@@ -330,15 +331,16 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
             return err;
             break;
         case PIUSB_UNMAP_USERBUFFER:
+        	dbg("unmapping buffer");
         	FreeFrameBuffer( pdx );
 //            UnMapUserBuffer( pdx );
             mutex_unlock(&ioctl_mutex);
             return 0;
             break;
         case PIUSB_READPIPE:
-        	//dbg("PIUSB_READPIPE"); // called constantly from the user-space side when acquiring
             if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
                 pr_info( "copy_from_user failed\n" );
+        	dbg("PIUSB_READPIPE %d", ctrl.endpoint); // called constantly from the user-space side when acquiring
             switch( ctrl.endpoint )
             {
                 case 0://ST133 Pixel Data or PIXIS IO
@@ -458,7 +460,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
                             for (i=0; i<pdx->sgEntries[pdx->active_frame]; i++){
 								u16 *buf = (urbs[i]->transfer_buffer);
 								unsigned int length = urbs[i]->actual_length;
-//								dbg("Got pixel data of urb %d = %x", i, buf[length/2]);
+								dbg("Got pixel data of urb %d = %x", i, buf[length/2]);
 								if (copy_to_user(to_buf, buf, length))
 									dbg("failed to copy pixel data of urb %d to user", i);
 								to_buf += length;
@@ -468,6 +470,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 //                                SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
                             pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
                             mutex_unlock(&ioctl_mutex);
+                            dbg("return %lu bytes of data", ctrl.numbytes);
                             return ctrl.numbytes;
                         }
                         break;
@@ -482,6 +485,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
             pdx->frameSize = ctrl.numbytes;
             pdx->num_frames = ctrl.numFrames;
             dbg("PIUSB_SETFRAMESIZE to %dx%lu", ctrl.numFrames, ctrl.numbytes);
+            // TODO: this should probably free it if it already exists, instead of skipping it (num_frames might be different from before)
             if( !pdx->sgl )
                 pdx->sgl = kmalloc( sizeof ( struct scatterlist *) * pdx->num_frames, GFP_KERNEL );
             if( !pdx->sgEntries )
@@ -569,7 +573,8 @@ int piusb_output( ioctl_struct *io, unsigned char *uBuf,int len, struct device_e
     struct urb *urb = NULL;
     int err = 0;
     unsigned char *kbuf = NULL;
-          
+
+    // TODO: return the number of bytes submitted or the error?
     urb = usb_alloc_urb( 0, GFP_KERNEL );
     if( urb != NULL )
     {        
@@ -592,6 +597,7 @@ int piusb_output( ioctl_struct *io, unsigned char *uBuf,int len, struct device_e
         {
             printk( KERN_INFO "%s %d\n", "WRITE ERROR:submit urb error =", err );
         }
+        pr_info("sending %d bytes to pipe %d\n", len, io->endpoint);
         pdx->pendingWrite = 1;
         usb_free_urb( urb );
     }
@@ -986,7 +992,7 @@ int AllocateFrameBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
         if( frameInfo % 2 )//check to see if this should use EP4(PONG)
         {
             epAddr = pdx->hEP[3];//PONG, odd frames
-            buf_size = pdx->maxp[3];
+            buf_size = pdx->maxp[3]; // FIXME: no need of cache: can use usb_pipe_endpoint(dev, urb->pipe); usb_endpoint_maxp(&ep->desc);?
         }
         else
         {
@@ -1003,7 +1009,8 @@ int AllocateFrameBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
     }
     dbg("UserAddress = 0x%08lX", uaddr );
 
-    // DEBUG
+    // DEBUG => we can ask actually for any big size => so just one URB for the
+    // whole buffer is fine (as long as the buffer is in just one place)
     buf_size = numbytes;
 
     numurb = ((int)numbytes / buf_size);
@@ -1054,14 +1061,15 @@ int AllocateFrameBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
 		urb->transfer_flags = URB_NO_TRANSFER_DMA_MAP/* | URB_NO_INTERRUPT*/;
 		pdx->PixelUrb[frameInfo][i] = urb;
     }
-    // DEBUG: it seem piusb_readPIXEL_callback expects to be called for each urb
+    // DEBUG: it seems that actually piusb_readPIXEL_callback expects to be called for each urb
     //only interrupt when last URB completes
 //    pdx->PixelUrb[frameInfo][numurb-1]->transfer_flags &= ~URB_NO_INTERRUPT;
 
 	for (i=0; i < numurb; i++) {
 		err = usb_submit_urb( pdx->PixelUrb[frameInfo][i], GFP_KERNEL );
+		dbg( "submitted urb %d", i);
 		if (err) {
-			dbg( "submit urb for entry %d error = %d\n", i, err);
+			dbg( "submit urb for entry %d error = %d", i, err);
 			pdx->pendedPixelUrbs[frameInfo][i] = 0;
 			retval = err;
 			goto error_kill;
@@ -1090,10 +1098,14 @@ static void piusb_write_bulk_callback (struct urb *urb)
     struct device_extension *pdx = (struct device_extension *)urb->context;
     
     /* sync/async unlink faults aren't errors */
-    if (urb->status && !(urb->status == -ENOENT || urb->status == -ECONNRESET)) 
-    {
-        dbg("%s - nonzero write bulk status received: %d",
-            __FUNCTION__, urb->status);
+    if (urb->status) {
+    	if ( urb->status == -ENOENT || urb->status == -ECONNRESET || urb->status == -ESHUTDOWN) {
+			dbg("urb write failed, due to status = %d", -urb->status);
+			return; // no hope to do anything more with the hardware
+    	} else {
+    		dbg("%s - nonzero write bulk status received: %d",
+    				__FUNCTION__, urb->status);
+    	}
     }
     pdx->pendingWrite = 0;
     kfree(urb->transfer_buffer);                                              
@@ -1104,50 +1116,54 @@ static void piusb_readPIXEL_callback ( struct urb *urb )
     int err=0;
     struct device_extension *pdx  = ( struct device_extension *) urb->context;
     
-    if( urb->status && !( urb->status == -ENOENT || urb->status == -ECONNRESET || urb->status == -ESHUTDOWN) )
-    {
-        dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
-        dbg( "Error in read EP2 callback" );
-        dbg( "FrameIndex = %d", pdx->frameIdx );
-        dbg( "Bytes received before problem occurred = %d", pdx->bulk_in_byte_trk );
-        dbg( "Urb Idx = %d", pdx->urbIdx );
-        pdx->pendedPixelUrbs[pdx->frameIdx][pdx->urbIdx] = 0;
-    }
-    else
-    {
-        pdx->bulk_in_byte_trk += urb->actual_length;
-//        dbg("Read %d bytes from bulk so far", pdx->bulk_in_byte_trk);
+    dbg("Received bulk");
 
-//        {
-//        	// Apparently the user interface expects us to keep listening to the
-//        	// camera until the buffer is unmapped. So resubmit the same URB to
-//        	// keep filling the cyclic buffer.
-//        	// TODO: problem is that it seems the kernel is not happy with submitting an
-//        	// URB already used.
-//        	err = usb_submit_urb( urb, GFP_ATOMIC ); //resubmit the URB
-//            if( err )
-//            {
-//                errCnt++;
-//                if( err != lastErr )
-//                {
-//                    dbg("submit urb in callback failed with error code %d", -err );
-//                    lastErr = err;
-//                }
-//            }
-//            else
-            {
-                pdx->urbIdx++;  //point to next URB when we callback
-                if( pdx->bulk_in_byte_trk >= pdx->frameSize )
-                {
-                    pdx->bulk_in_size_returned = pdx->bulk_in_byte_trk;
-                    pdx->bulk_in_byte_trk = 0;
-                    pdx->gotPixelData = 1;
-                    pdx->frameIdx = ( ( pdx->frameIdx + 1 ) % pdx->num_frames );
-                    pdx->urbIdx = 0;
-                }
-//            }
-        }
+    if( urb->status &&
+    	!( urb->status == -ENOENT || urb->status == -ECONNRESET ||
+    	   urb->status == -ESHUTDOWN)) { // for these 3 errors -> we might have still received something
+//    		dbg("urb acquisition failed, due to status = %d", -urb->status);
+//    		return; // no hope to do anything more with the hardware
+		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
+		dbg( "Error in read EP2 callback" );
+		dbg( "FrameIndex = %d", pdx->frameIdx );
+		dbg( "Bytes received before problem occurred = %d", pdx->bulk_in_byte_trk );
+		dbg( "Urb Idx = %d", pdx->urbIdx );
+		pdx->pendedPixelUrbs[pdx->frameIdx][pdx->urbIdx] = 0;
+		return;
     }
+
+	pdx->bulk_in_byte_trk += urb->actual_length;
+	dbg("Read %d bytes from bulk so far", pdx->bulk_in_byte_trk);
+
+	pdx->urbIdx++;  //point to next URB when we callback
+	if( pdx->bulk_in_byte_trk >= pdx->frameSize )
+	{
+		pdx->bulk_in_size_returned = pdx->bulk_in_byte_trk;
+		pdx->bulk_in_byte_trk = 0;
+		pdx->gotPixelData = 1;
+		pdx->frameIdx = ( ( pdx->frameIdx + 1 ) % pdx->num_frames );
+		pdx->urbIdx = 0;
+		dbg("We got a whole pixel data");
+	}
+
+	// Apparently the user interface expects us to keep listening to the
+	// camera until the buffer is unmapped. So resubmit the same URB to
+	// keep filling the cyclic buffer. (Unless it has been trying to stop)
+	// eg urb->status == -ENOENT means UnMapBuffer has been called
+	if (!urb->status) {
+		err = usb_submit_urb( urb, GFP_ATOMIC ); //resubmit the URB
+		if( err && err != -EPERM )
+		{
+			errCnt++;
+			if( err != lastErr )
+			{
+				dbg("submit urb in callback failed with error code %d", -err );
+				lastErr = err;
+			}
+			return;
+		} else if (err == -EPERM)
+			dbg("submit urb in callback failed, due to shutdown" );
+	}
 } 
 
 module_init ( piusb_init );
