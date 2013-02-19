@@ -1,0 +1,3 @@
+BUS="usb", SYSFS{idProduct}="a010", SYSFS{idVendor}="0bd7", GROUP="PISE", MODE="0666"
+BUS="usb", SYSFS{idProduct}="a026", SYSFS{idVendor}="0bd7", GROUP="PISE", MODE="0666"
+

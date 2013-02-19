@@ -1,0 +1,29 @@
+USB 2.0 DRIVER
+
+This driver supports PIXIS and ST133 controller with USB card.
+
+Requirements
+
+	Pvcam library - version 2.7.1.6 or later required
+	Download from ftp site: ftp://ftp.piacton.com/software/official/linux/PISDKinst2.7.X.Y.tar.gz
+
+*NOTE - if there is a previously installed version, remove it first before continuing*
+
+Installation Instructions
+
+	Build the rspiusb driver (make)
+	Install the driver (make install)
+	
+	By default the driver loads when a known PI USB device is powered on.
+	The driver is only accessible to root users.  If a user other than root needs access
+	to the driver, copy the file 10-pi.rules to /etc/udev/rules.d/
+	The default group name is PISE.  Change PISE to the appropriate group name, save the file,
+	and either reboot or run udevstart.
+
+
+	
+ 
+
+	
+
+
