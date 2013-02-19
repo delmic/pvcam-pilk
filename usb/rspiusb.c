@@ -683,7 +683,7 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
 		kfree(uBuf);
 		return -EFAULT;
 	}
-
+#if 0
 	do {
 		ret = usb_bulk_msg(pdx->udev, pdx->hEP[ctrl->endpoint],
 				(uBuf + totalRead),
@@ -704,6 +704,23 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
 		totalRead += numbytes;
 		numToRead -= numbytes;
 	} while (numToRead);
+#else
+	ret = usb_bulk_msg(pdx->udev, pdx->hEP[ctrl->endpoint],
+			uBuf,
+			numToRead,
+			&numbytes, HZ * 10);
+	if (ret) {
+		dbg("CMD = %s, Address = 0x%02X",
+				((uBuf[3] == 0x02) ? "WRITE" : "READ"),
+				uBuf[1]);
+		dbg("Number of bytes Attempted to read = %lu", ctrl->numbytes);
+		dbg("Blocking ReadI/O Failed with status %d", ret);
+		kfree(uBuf);
+		return ret;
+	}
+	dbg("EP Read %d bytes", numbytes);
+	totalRead = numbytes;
+#endif
 
 	memcpy(ctrl->pData, uBuf, totalRead);
 	dbg("Total Bytes Read from EP[%d] = %d", ctrl->endpoint, totalRead);
