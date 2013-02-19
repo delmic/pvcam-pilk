@@ -1,19 +1,3 @@
-#include <linux/vmalloc.h>
-#include <linux/kernel.h>
-#include <linux/errno.h>
-#include <linux/init.h>
-#include <linux/slab.h>
-#include <linux/module.h>
-#include <linux/completion.h>
-#include <linux/mutex.h>
-#include <asm/uaccess.h>
-#include <linux/usb.h>
-#include <asm/scatterlist.h>
-#include <linux/mm.h>
-#include <linux/pci.h> //for scatterlist macros
-#include <linux/pagemap.h>
-#include "rspiusb.h"
-
 /*
  * rspiusb.c
  *
@@ -33,6 +17,22 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <linux/vmalloc.h>
+#include <linux/kernel.h>
+#include <linux/errno.h>
+#include <linux/init.h>
+#include <linux/slab.h>
+#include <linux/module.h>
+#include <linux/completion.h>
+#include <linux/mutex.h>
+#include <asm/uaccess.h>
+#include <linux/usb.h>
+#include <asm/scatterlist.h>
+#include <linux/mm.h>
+#include <linux/pci.h> //for scatterlist macros
+#include <linux/pagemap.h>
+#include "rspiusb.h"
+
 #ifdef CONFIG_USB_DEBUG
   static int debug = 1;
 #else
@@ -42,547 +42,25 @@
 #undef dbg
 #define dbg(format, arg...) do { if (debug) printk(KERN_DEBUG "rspiusb: " format "\n" , ## arg); } while (0)
 
+/* Version Information */
+#define DRIVER_VERSION "V1.0.3"
+#define DRIVER_DESC    "PI USB2.0 Device Driver for Linux"
 
-/* Module parameters */
-module_param(debug, int, 0 );
-MODULE_PARM_DESC(debug, "Debug enabled or not");
-
-static void piusb_delete (struct kref *kref);
-int AllocateFrameBuffer( struct IOCTL_STRUCT*, struct device_extension * );
-int FreeFrameBuffer( struct device_extension * );
-int MapUserBuffer( struct IOCTL_STRUCT*, struct device_extension * );
-int UnMapUserBuffer( struct device_extension * );
 static void piusb_write_bulk_callback(struct urb * );
 static void piusb_readPIXEL_callback ( struct urb * );
+static struct usb_driver piusb_driver;
 
-static int lastErr = 0;
-static int errCnt=0;
+static int lastErr;
+static int errCnt;
 
 static DEFINE_MUTEX(ioctl_mutex); // FIXME: should be per device (-> device extension)
 
-/**
- *  piusb_probe
- *
- *  Called by the usb core when a new device is connected that it thinks
- *  this driver might be interested in.
- */
-static int piusb_probe(struct usb_interface *interface, const struct usb_device_id *id)
-{
-    struct device_extension *pdx = NULL;
-    struct usb_host_interface *iface_desc;
-    struct usb_endpoint_descriptor *endpoint;
-    int i;
-    int retval = -ENOMEM;
-    dbg("%s - Looking for PI USB Hardware", __FUNCTION__ );
-    
-    pdx = kmalloc( sizeof( struct device_extension ), GFP_KERNEL );
-    if( pdx == NULL )
-    {
-        err("Out of memory" );
-        goto error;
-    }
-    memset( pdx, 0x00, sizeof( *pdx ) );
-    kref_init( &pdx->kref );
-    pdx->udev = usb_get_dev( interface_to_usbdev(interface));
-    pdx->interface = interface;
-    iface_desc = interface->cur_altsetting;
-    
-    /* See if the device offered us matches what we can accept */
-    if ((pdx->udev->descriptor.idVendor != VENDOR_ID) || ((pdx->udev->descriptor.idProduct != PIXIS_PID) && 
-        (pdx->udev->descriptor.idProduct != ST133_PID ))) 
-        {
-        return -ENODEV;
-    }
-    pdx->iama = pdx->udev->descriptor.idProduct;
-    
-    if( debug )
-    {
-        if( pdx->udev->descriptor.idProduct == PIXIS_PID )
-            dbg("PIUSB:Pixis Camera Found" );
-        else
-            dbg("PIUSB:ST133 USB Controller Found" );
-        if( pdx->udev->speed  == USB_SPEED_HIGH )
-            dbg("Highspeed(USB2.0) Device Attached" );
-        else
-            dbg("Lowspeed (USB1.1) Device Attached" );
-            
-        dbg( "NumEndpoints in Configuration: %d", iface_desc->desc.bNumEndpoints );
-    }
-    for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) 
-    {
-        endpoint = &iface_desc->endpoint[i].desc;
-        if( debug )
-        {
-        dbg( "Endpoint[%d]->bDescriptorType = %d", i, endpoint->bDescriptorType );
-            dbg( "Endpoint[%d]->bEndpointAddress = 0x%02X", i, endpoint->bEndpointAddress );
-        dbg( "Endpoint[%d]->bbmAttributes = %d", i, endpoint->bmAttributes );
-        dbg( "Endpoint[%d]->MaxPacketSize = %d\n", i, endpoint->wMaxPacketSize );
-        }
-        if(usb_endpoint_xfer_bulk(endpoint))
-        {
-            if(usb_endpoint_dir_in(endpoint))
-                pdx->hEP[i] = usb_rcvbulkpipe( pdx->udev, endpoint->bEndpointAddress );
-            else
-                pdx->hEP[i] = usb_sndbulkpipe( pdx->udev, endpoint->bEndpointAddress );
-            pdx->maxp[i] = usb_endpoint_maxp(endpoint);
-        }
-    }
-    usb_set_intfdata( interface, pdx );
-    retval = usb_register_dev( interface, &piusb_class );
-    if( retval )
-    {
-        err( "Not able to get a minor for this device." );
-        usb_set_intfdata( interface, NULL );
-        goto error;
-    }
-    pdx->present = 1;
-    
-    /* we can register the device now, as it is ready */
-    pdx->minor = interface->minor;
-    /* let the user know what node this device is now attached to */
-    dbg ("PI USB2.0 device now attached to piusb-%d", pdx->minor);
-    return 0;
-
-error:
-    if( pdx )
-        kref_put( &pdx->kref, piusb_delete );
-    return retval;
-}
 
 /**
- *  piusb_delete
+ * Called from user-space (via the IOCTL) to send some data to one of the output
+ * bulk endpoints (eg: 1 or 8).
  */
-static void piusb_delete (struct kref *kref)
-{
-    struct device_extension *pdx = to_pi_dev( kref );
-    
-    dbg( "piusb_delete()" );
-    usb_put_dev( pdx->udev );
-    kfree( pdx );  
-}
-
-
-/**
- *  piusb_open
- */
-static int piusb_open (struct inode *inode, struct file *file)
-{
-    struct device_extension *pdx = NULL;
-    struct usb_interface *interface;
-    int subminor;
-    int retval = 0;
-    
-    dbg( "Piusb_Open()" );
-    subminor = iminor(inode);
-    interface = usb_find_interface (&piusb_driver, subminor);
-    if (!interface) 
-    {
-        err ("%s - error, can't find device for minor %d", __FUNCTION__, subminor);
-        retval = -ENODEV;
-        goto exit_no_device;
-    }
-    
-    pdx = usb_get_intfdata(interface);
-    if (!pdx) 
-    {
-        retval = -ENODEV;
-        goto exit_no_device;
-    }
-    dbg( "Alternate Setting = %d", interface->num_altsetting );
-    
-    pdx->frameIdx = pdx->urbIdx = 0;
-    pdx->gotPixelData = 0;
-    pdx->pendingWrite = 0; // FIXME: never read
-    pdx->frameSize = 0;
-    pdx->num_frames = 0;
-    pdx->active_frame = 0;
-    pdx->bulk_in_byte_trk = 0;
-    pdx->userBufMapped = 0; // FIXME: never read
-    pdx->pendedPixelUrbs = NULL;
-    pdx->sgEntries = NULL;
-    pdx->sgl = NULL;
-    pdx->maplist_numPagesMapped = NULL;
-    pdx->PixelUrb = NULL;
-    pdx->bulk_in_size_returned = 0;
-    /* increment our usage count for the device */
-    kref_get(&pdx->kref);
-    /* save our object in the file's private structure */
-    file->private_data = pdx;
-exit_no_device:
-    return retval;
-}
-
-/**
- *  piusb_release
- */
-static int piusb_release (struct inode *inode, struct file *file)
-{
-    struct device_extension *pdx;
-    int retval = 0;
-    
-    dbg( "Piusb_Release()" );
-    pdx = (struct device_extension *)file->private_data;
-    if (pdx == NULL) 
-    {
-        dbg ("%s - object is NULL", __FUNCTION__ );
-        return -ENODEV;
-    }
-  /* decrement the count on our device */
-    kref_put(&pdx->kref, piusb_delete);
-    return retval;
-}
-
-
-/**
- *  piusb_ioctl
- */
-static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
-{
-    struct device_extension *pdx;
-    char dummyCtlBuf[] = {0,0,0,0,0,0,0,0};
-    unsigned long devRB=0;
-    int i = 0;
-    int err = 0;
-    int retval = 0;
-    ioctl_struct ctrl;
-    unsigned char *uBuf;
-    int numbytes = 0;
-    unsigned short controlData = 0;   
-    
-    pdx = (struct device_extension *)file->private_data;
-    mutex_lock(&ioctl_mutex);
-    /* verify that the device wasn't unplugged */
-    if (!pdx->present) 
-        {
-        dbg( "No Device Present\n" );
-        mutex_unlock(&ioctl_mutex);
-        return -ENODEV;
-    }
-
-
-  /* fill in your device specific stuff here */
-    if( _IOC_DIR( cmd ) & _IOC_READ )
-        err = !access_ok( VERIFY_WRITE, (void __user *) arg, _IOC_SIZE( cmd ) );
-    else if (_IOC_DIR(cmd) & _IOC_WRITE)
-        err =  !access_ok(VERIFY_READ, (void __user *)arg, _IOC_SIZE(cmd));
-    if( err )
-    {
-        printk( KERN_INFO "return with error = %d\n", err );
-        mutex_unlock(&ioctl_mutex);
-        return -EFAULT;
-    }
-    switch( cmd )
-  {
-        case PIUSB_GETVNDCMD:
-            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                pr_info( "copy_from_user failed\n" );
-            dbg( "%s %x\n", "Get Vendor Command = ",ctrl.cmd );
-            retval = usb_control_msg( pdx->udev, usb_rcvctrlpipe( pdx->udev, 0 ), ctrl.cmd, 
-                            USB_DIR_IN, 0, 0, &devRB,  ctrl.numbytes, HZ*10 );
-            if( ctrl.cmd == 0xF1 )
-            {
-                dbg( "FW Version returned from HW = %ld.%ld", (devRB>>8),(devRB&0xFF) );
-            }
-            mutex_unlock(&ioctl_mutex);
-            return devRB;
-        case PIUSB_SETVNDCMD:
-            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                pr_info( "copy_from_user failed\n" );
-            dbg( "%s %x", "Set Vendor Command = ",ctrl.cmd );
-            controlData = ( ctrl.pData[1] << 8 ) | ctrl.pData[0];
-            dbg( "%s %d", "Vendor Data =",controlData );
-            retval = usb_control_msg( pdx->udev,
-                            usb_sndctrlpipe( pdx->udev, 0 ),
-                            ctrl.cmd,
-                            (USB_DIR_OUT | USB_TYPE_VENDOR ),/* | USB_RECIP_ENDPOINT), */
-                            controlData,
-                            0,
-//                            &dummyCtlBuf, // FIXME: really? pointer to a array pointer?!
-                            dummyCtlBuf,
-                            ctrl.numbytes,
-                            HZ*10 );
-            mutex_unlock(&ioctl_mutex);
-            dbg( "control msg returned %d", retval);
-            return retval;
-            break;
-        case PIUSB_ISHIGHSPEED:
-        	mutex_unlock(&ioctl_mutex);
-            return ( ( pdx->udev->speed == USB_SPEED_HIGH ) ? 1 : 0 );
-            break;
-        case PIUSB_WRITEPIPE:
-        	dbg("PIUSB_WRITEPIPE");
-            if( copy_from_user( &ctrl, (void __user*)arg, _IOC_SIZE( cmd ) ) )
-                pr_info( "copy_from_user WRITE_DUMMY failed\n" );
-            if( !access_ok( VERIFY_READ, ctrl.pData, ctrl.numbytes ) )
-            {
-                dbg("can't access pData" );
-                return 0;
-            }
-            piusb_output( &ctrl, ctrl.pData/*uBuf*/, ctrl.numbytes, pdx );
-            mutex_unlock(&ioctl_mutex);
-            return ctrl.numbytes;
-            break;
-        case PIUSB_USERBUFFER:
-            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                pr_info( "copy_from_user failed\n" );
-//            err = MapUserBuffer( (ioctl_struct *) &ctrl, pdx );
-            err = AllocateFrameBuffer( (ioctl_struct *) &ctrl, pdx );
-            mutex_unlock(&ioctl_mutex);
-            return err;
-            break;
-        case PIUSB_UNMAP_USERBUFFER:
-        	dbg("unmapping buffer");
-        	FreeFrameBuffer( pdx );
-//            UnMapUserBuffer( pdx );
-            mutex_unlock(&ioctl_mutex);
-            return 0;
-            break;
-        case PIUSB_READPIPE:
-            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                pr_info( "copy_from_user failed\n" );
-        	dbg("PIUSB_READPIPE %d", ctrl.endpoint); // called constantly from the user-space side when acquiring
-            switch( ctrl.endpoint )
-            {
-                case 0://ST133 Pixel Data or PIXIS IO
-                    if( pdx->iama == PIXIS_PID )
-                    {
-                        unsigned int numToRead = 0;
-                        unsigned int totalRead = 0;
-                        uBuf = kmalloc( ctrl.numbytes, GFP_KERNEL );
-                        if( !uBuf )
-                        {
-                            dbg("Alloc for uBuf failed" );
-                            mutex_unlock(&ioctl_mutex);
-                            return 0;
-                        }
-                        numbytes = ctrl.numbytes;
-                        numToRead = numbytes;
-                        dbg( "numbytes to read = %d", numbytes );
-                        dbg( "endpoint # %d", ctrl.endpoint );
-                        if( copy_from_user( uBuf, ctrl.pData, numbytes ) )
-                            dbg("copying ctrl.pData to dummyBuf failed" );
-                        do
-                        {
-                            i = usb_bulk_msg( pdx->udev, pdx->hEP[ctrl.endpoint],(uBuf + totalRead ), 
-                                            (numToRead > 64)?64:numToRead,&numbytes, HZ*10 ); //EP0 can only handle 64 bytes at a time
-                            if( i )
-                            {
-                                dbg( "CMD = %s, Address = 0x%02X",((uBuf[3] == 0x02) ? "WRITE":"READ" ), uBuf[1] );
-                                dbg( "Number of bytes Attempted to read = %d", (int)ctrl.numbytes );
-                                dbg( "Blocking Read I/O Failed with status %d", i );
-                                kfree( uBuf );
-                                mutex_unlock(&ioctl_mutex);
-                                return -1;
-                            }
-                            else
-                            {
-                                dbg( "Pixis EP0 Read %d bytes", numbytes );
-                                totalRead += numbytes;
-                                numToRead -= numbytes;
-                            }
-                        }
-                        while( numToRead );
-                        memcpy( ctrl.pData, uBuf, totalRead );
-                        dbg( "Total Bytes Read from PIXIS EP0 = %d", totalRead );
-                        ctrl.numbytes = totalRead;
-                        if( copy_to_user( (ioctl_struct *)arg, &ctrl, sizeof( ioctl_struct ) ) )
-                            dbg("copy_to_user failed in IORB" );
-                        kfree( uBuf );
-                        mutex_unlock(&ioctl_mutex);
-                        return ctrl.numbytes;
-                    }
-                    else //ST133 Pixel Data
-                    {
-                        if( !pdx->gotPixelData )
-                            return 0;
-                        else
-                        {
-                            pdx->gotPixelData = 0;
-                            ctrl.numbytes = pdx->bulk_in_size_returned;
-                            pdx->bulk_in_size_returned -= pdx->frameSize; // FIXME: not sure when this is used??
-                            for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
-                                SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
-                            pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
-                            mutex_unlock(&ioctl_mutex);
-                            return ctrl.numbytes;
-                        }
-                    }
-                    break;
-                case 1://ST133IO
-                case 4://PIXIS IO
-                    uBuf = kmalloc( ctrl.numbytes, GFP_KERNEL );
-                    if( !uBuf )
-                    {
-                        dbg("Alloc for uBuf failed" );
-                        mutex_unlock(&ioctl_mutex);
-                        return 0;
-                    }
-                    numbytes = ctrl.numbytes;
-//          dbg( "numbytes to read = %d", numbytes );
-                    if( copy_from_user( uBuf, ctrl.pData, numbytes ) )
-                        dbg("copying ctrl.pData to dummyBuf failed" );
-                    i = usb_bulk_msg( pdx->udev, pdx->hEP[ctrl.endpoint],uBuf,
-                                numbytes,&numbytes, HZ*10 );
-                    if( i )
-                    {
-                        dbg( "Blocking ReadI/O Failed with status %d", i );
-                        kfree( uBuf );
-                        mutex_unlock(&ioctl_mutex);
-                        return -1;
-                    }
-                    else
-                    {
-                        ctrl.numbytes = numbytes;
-                        memcpy( ctrl.pData, uBuf, numbytes );
-                        if( copy_to_user( (ioctl_struct *)arg, &ctrl, sizeof( ioctl_struct ) ) )
-                            dbg("copy_to_user failed in IORB" );
-                        kfree( uBuf );
-                        mutex_unlock(&ioctl_mutex);
-                        return ctrl.numbytes;
-                    }
-                    break;
-    
-                case 2://PIXIS Ping
-                case 3://PIXIS Pong
-                        if( !pdx->gotPixelData ) {
-                        	mutex_unlock(&ioctl_mutex);
-                            return 0;
-                        }
-                        else
-                        {
-                        	struct urb **urbs = pdx->PixelUrb[pdx->active_frame];
-                        	unsigned char *to_buf = pdx->user_buffer[pdx->active_frame];
-
-                            pdx->gotPixelData = 0;
-                            ctrl.numbytes = pdx->bulk_in_size_returned;
-                            pdx->bulk_in_size_returned -= pdx->frameSize;
-
-                            for (i=0; i<pdx->sgEntries[pdx->active_frame]; i++){
-								u16 *buf = (urbs[i]->transfer_buffer);
-								unsigned int length = urbs[i]->actual_length;
-								dbg("Got pixel data of urb %d = %x", i, buf[length/2]);
-								if (copy_to_user(to_buf, buf, length))
-									dbg("failed to copy pixel data of urb %d to user", i);
-								to_buf += length;
-
-								// resubmitting the urb if it must
-								err = usb_submit_urb( urbs[i], GFP_KERNEL ); //resubmit the URB
-								if( err && err != -EPERM )
-								{
-									errCnt++;
-									if( err != lastErr )
-									{
-										dbg("submit urb in callback failed with error code %d", -err );
-										lastErr = err;
-									}
-								} else if (err == -EPERM)
-									dbg("submit urb in callback failed, due to shutdown" );
-
-                            }
-                            // DEBUG
-//                            for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
-//                                SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
-                            pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
-                            mutex_unlock(&ioctl_mutex);
-                            dbg("return %lu bytes of data", ctrl.numbytes);
-                            return ctrl.numbytes;
-                        }
-                        break;
-            }
-            break;
-        case PIUSB_WHATCAMERA:
-        	mutex_unlock(&ioctl_mutex);
-            return pdx->iama;
-        case PIUSB_SETFRAMESIZE:
-            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
-                pr_info( "copy_from_user failed\n" );
-            pdx->frameSize = ctrl.numbytes;
-            pdx->num_frames = ctrl.numFrames;
-            dbg("PIUSB_SETFRAMESIZE to %dx%lu", ctrl.numFrames, ctrl.numbytes);
-            // TODO: this should probably free it if it already exists, instead of skipping it (num_frames might be different from before)
-            if( !pdx->sgl )
-                pdx->sgl = kmalloc( sizeof ( struct scatterlist *) * pdx->num_frames, GFP_KERNEL );
-            if( !pdx->sgEntries )
-                pdx->sgEntries = kmalloc( sizeof( unsigned int ) * pdx->num_frames, GFP_KERNEL );
-            if( !pdx->PixelUrb )
-                pdx->PixelUrb = kmalloc( sizeof( struct urb **) * pdx->num_frames, GFP_KERNEL );
-            if( !pdx->maplist_numPagesMapped )
-                pdx->maplist_numPagesMapped = vmalloc( sizeof( unsigned int ) * pdx->num_frames );
-            if( !pdx->pendedPixelUrbs )
-                pdx->pendedPixelUrbs = kmalloc( sizeof( char *) * pdx->num_frames, GFP_KERNEL );
-            if( !pdx->user_buffer)
-                pdx->user_buffer = kmalloc( sizeof(unsigned char *) * pdx->num_frames, GFP_KERNEL );
-            mutex_unlock(&ioctl_mutex);
-            return 0;
-        default:
-            dbg( "%s\n", "No IOCTL found" );
-            break;
-            
-    }
-    /* return that we did not understand this ioctl call */
-    dbg( "Returning -ENOTTY" );
-    mutex_unlock(&ioctl_mutex);
-    return -ENOTTY;
-}
-
-
-
-/**
- *  piusb_disconnect
- *
- *  Called by the usb core when the device is removed from the system.
- *
- *  This routine guarantees that the driver will not submit any more urbs
- *  by clearing pdx->udev.  It is also supposed to terminate any currently
- *  active urbs.  Unfortunately, usb_bulk_msg(), used in piusb_read(), does
- *  not provide any way to do this.  But at least we can cancel an active
- *  write.
- */
-static void piusb_disconnect(struct usb_interface *interface)
-{
-    struct device_extension *pdx;
-    int minor = interface->minor;
-
-    mutex_lock(&ioctl_mutex);
-    pdx = usb_get_intfdata (interface);
-    usb_set_intfdata (interface, NULL);
-    /* give back our minor */
-    usb_deregister_dev (interface, &piusb_class);
-    /* prevent device read, write and ioctl */
-    pdx->present = 0;
-    mutex_unlock(&ioctl_mutex);
-    kref_put( &pdx->kref, piusb_delete );
-    dbg("PI USB2.0 device #%d now disconnected\n", minor);
-}
-
-/**
- *  piusb_init
- */
-static int __init piusb_init(void)
-{  
-    int result;
-    
-    /* register this driver with the USB subsystem */
-    result = usb_register(&piusb_driver);
-    if (result) 
-        {
-        err("usb_register failed. Error number %d", result);
-        return result;
-    }
-    pr_info("%s: %s",DRIVER_DESC,DRIVER_VERSION);
-    return 0;
-}
-
-/**
- *  piusb_exit
- */
-static void __exit piusb_exit(void)
-{
-    /* deregister this driver with the USB subsystem */
-    usb_deregister(&piusb_driver);
-}
-
-int piusb_output( ioctl_struct *io, unsigned char *uBuf,int len, struct device_extension *pdx )
+int piusb_output( ioctl_struct *io, unsigned char *uBuf, int len, struct device_extension *pdx )
 {
     struct urb *urb = NULL;
     int err = 0;
@@ -595,21 +73,20 @@ int piusb_output( ioctl_struct *io, unsigned char *uBuf,int len, struct device_e
         kbuf = kmalloc(len, GFP_KERNEL);                                  
         if (kbuf == NULL) 
         {                                                      
-            pr_info("kmalloc failed for pisub_output\n");        
+        	dev_err(&pdx->udev->dev, "buffer_alloc failed\n");
             return -ENOMEM;                                           
         }                                                                 
-        if(copy_from_user(kbuf, uBuf, len)) 
+        if (copy_from_user(kbuf, uBuf, len))
         {                           
-            pr_info("copy_from_user failed for pisub_output\n");        
+        	dev_err(&pdx->udev->dev, "copy_from_user failed\n");
             return -EFAULT;                                           
         }                                                                 
               
         usb_fill_bulk_urb( urb, pdx->udev, pdx->hEP[io->endpoint], kbuf, len, piusb_write_bulk_callback, pdx );
         
         err = usb_submit_urb( urb, GFP_KERNEL );
-        if( err )
-        {
-            printk( KERN_INFO "%s %d\n", "WRITE ERROR:submit urb error =", err );
+        if (err) {
+			dev_err(&pdx->udev->dev, "WRITE ERROR:submit urb error = %d\n", err);
         }
         pr_info("sending %d bytes to pipe %d\n", len, io->endpoint);
         pdx->pendingWrite = 1;
@@ -620,7 +97,7 @@ int piusb_output( ioctl_struct *io, unsigned char *uBuf,int len, struct device_e
 
 // Next 2 functions are directly from core/usb.c, where they have been
 // disabled because there is no user in-kernel.
-// A possibility would be to use directly dma_(un)map_sg.
+// A possibility would be to use directly dma_(un)map_sg. (pipe is always IN)
 
 /**
  * usb_buffer_map_sg - create scatterlist DMA mapping(s) for an endpoint
@@ -978,15 +455,22 @@ int FreeFrameBuffer( struct device_extension *pdx )
     pdx->PixelUrb = NULL;
     return 0;
 }
+
 /* DEBUG:
  * Same as MapUserBuffer, but doesn't actually map the user buffer, just allocates
  * our own urbs.
  */
+
+/*
+ * Maximum size for each allocation block, if it's too big, it might have some
+ * fail being allocated. So we use 100 Kb. 1Mb seemed to work fine too, but at
+ * least we are sure to test multiple URBs.
+ */
+#define MAX_BUFFER_SIZE (102400)
 int AllocateFrameBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
 {
-    unsigned long uaddr;
-    unsigned long numbytes;
-    int frameInfo; //which frame we're mapping
+    unsigned long numbytes = io->numbytes; // length of the buffer
+    int frameInfo = io->numFrames; // which frame we're mapping
     unsigned int epAddr;
     int i = 0;
     int err = 0;
@@ -996,37 +480,28 @@ int AllocateFrameBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
     unsigned int buf_size, size_last;
     int numurb;
 
-    frameInfo = io->numFrames;
-    uaddr = (unsigned long) io->pData;
-    numbytes = io->numbytes;
-    pdx->user_buffer[frameInfo] = io->pData; // for copying back to the user
+    pdx->user_buffer[frameInfo] = io->pData; // address of the user buffer, to copy it back
 
     if( pdx->iama == PIXIS_PID ) //if so, which EP should we map this frame to
     {
         if( frameInfo % 2 )//check to see if this should use EP4(PONG)
         {
             epAddr = pdx->hEP[3];//PONG, odd frames
-            buf_size = pdx->maxp[3]; // FIXME: no need of cache: can use usb_pipe_endpoint(dev, urb->pipe); usb_endpoint_maxp(&ep->desc);?
         }
         else
         {
             epAddr = pdx->hEP[2];//PING, even frames and zero
-            buf_size = pdx->maxp[2];
         }
         dbg("Pixis Frame #%d: EP=%d",frameInfo, (epAddr==pdx->hEP[2]) ? 2 : 4 );
     }
     else //ST133 only has 1 endpoint for Pixel data transfer
     {
         epAddr = pdx->hEP[0];
-        buf_size = pdx->maxp[0];
         dbg("ST133 Frame #%d: EP=2",frameInfo );
     }
-    dbg("UserAddress = 0x%08lX", uaddr );
+    dbg("UserAddress = %p", io->pData );
 
-    // DEBUG => we can ask actually for any big size => so just one URB for the
-    // whole buffer is fine (as long as the buffer is in just one place)
-    buf_size = numbytes;
-
+    buf_size = min((int)numbytes, MAX_BUFFER_SIZE);
     numurb = ((int)numbytes / buf_size);
     size_last = ((int)numbytes % buf_size);
     if (size_last)
@@ -1065,23 +540,18 @@ int AllocateFrameBuffer( struct IOCTL_STRUCT *io, struct device_extension *pdx )
 			goto error;
 		}
 
-		usb_fill_bulk_urb( urb,
-					pdx->udev,
-					epAddr,
-					buf,
-					size,
-					piusb_readPIXEL_callback,
-					(void *)pdx );
-		urb->transfer_flags = URB_NO_TRANSFER_DMA_MAP/* | URB_NO_INTERRUPT*/;
+		usb_fill_bulk_urb(urb, pdx->udev, epAddr, buf, size,
+				          piusb_readPIXEL_callback, (void *)pdx);
+		urb->transfer_flags = URB_NO_TRANSFER_DMA_MAP;
 		pdx->PixelUrb[frameInfo][i] = urb;
     }
-    // DEBUG: it seems that actually piusb_readPIXEL_callback expects to be called for each urb
-    //only interrupt when last URB completes
+    /* Old version used to only activate interrupt for the last URB. It might
+     * work, but piusb_readPIXEL_callback() need some changes for that.
+     */
 //    pdx->PixelUrb[frameInfo][numurb-1]->transfer_flags &= ~URB_NO_INTERRUPT;
 
 	for (i=0; i < numurb; i++) {
 		err = usb_submit_urb( pdx->PixelUrb[frameInfo][i], GFP_KERNEL );
-		dbg( "submitted urb %d", i);
 		if (err) {
 			dbg( "submit urb for entry %d error = %d", i, err);
 			pdx->pendedPixelUrbs[frameInfo][i] = 0;
@@ -1126,16 +596,11 @@ static void piusb_write_bulk_callback (struct urb *urb)
 
 static void piusb_readPIXEL_callback ( struct urb *urb )
 {
-    int err=0;
     struct device_extension *pdx  = ( struct device_extension *) urb->context;
-    
-    dbg("Received bulk");
 
     if( urb->status &&
     	!( urb->status == -ENOENT || urb->status == -ECONNRESET ||
     	   urb->status == -ESHUTDOWN)) { // for these 3 errors -> we might have still received something
-//    		dbg("urb acquisition failed, due to status = %d", -urb->status);
-//    		return; // no hope to do anything more with the hardware
 		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
 		dbg( "Error in read EP2 callback" );
 		dbg( "FrameIndex = %d", pdx->frameIdx );
@@ -1146,7 +611,6 @@ static void piusb_readPIXEL_callback ( struct urb *urb )
     }
 
 	pdx->bulk_in_byte_trk += urb->actual_length;
-    dbg("Read %d bytes from bulk so far", pdx->bulk_in_byte_trk);
 
 	pdx->urbIdx++;  //point to next URB when we callback
 	if( pdx->bulk_in_byte_trk >= pdx->frameSize )
@@ -1158,13 +622,14 @@ static void piusb_readPIXEL_callback ( struct urb *urb )
 		pdx->urbIdx = 0;
 	}
 
-	// You cannot submit it here, because the data hasn't been copied yet
+	// You cannot submit it here if using the in-kernel buffer, because the data hasn't been copied yet
 
 	// Apparently the user interface expects us to keep listening to the
 	// camera until the buffer is unmapped. So resubmit the same URB to
 	// keep filling the cyclic buffer. (Unless it has been trying to stop)
 	// eg urb->status == -ENOENT means UnMapBuffer has been called
 //	if (!urb->status) {
+//      int err=0;
 //		err = usb_submit_urb( urb, GFP_ATOMIC ); //resubmit the URB
 //		if( err && err != -EPERM )
 //		{
@@ -1179,10 +644,569 @@ static void piusb_readPIXEL_callback ( struct urb *urb )
 //			dbg("submit urb in callback failed, due to shutdown" );
 } 
 
+
+static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
+{
+    struct device_extension *pdx;
+    char dummyCtlBuf[] = {0,0,0,0,0,0,0,0};
+    unsigned long devRB=0;
+    int i = 0;
+    int err = 0;
+    int retval = 0;
+    ioctl_struct ctrl;
+    unsigned char *uBuf;
+    int numbytes = 0;
+    unsigned short controlData = 0;
+
+    pdx = (struct device_extension *)file->private_data;
+    mutex_lock(&ioctl_mutex);
+    /* verify that the device wasn't unplugged */
+    if (!pdx->present)
+        {
+        dbg( "No Device Present\n" );
+        mutex_unlock(&ioctl_mutex);
+        return -ENODEV;
+    }
+
+
+  /* fill in your device specific stuff here */
+    if( _IOC_DIR( cmd ) & _IOC_READ )
+        err = !access_ok( VERIFY_WRITE, (void __user *) arg, _IOC_SIZE( cmd ) );
+    else if (_IOC_DIR(cmd) & _IOC_WRITE)
+        err =  !access_ok(VERIFY_READ, (void __user *)arg, _IOC_SIZE(cmd));
+    if( err )
+    {
+        printk( KERN_INFO "return with error = %d\n", err );
+        mutex_unlock(&ioctl_mutex);
+        return -EFAULT;
+    }
+    switch( cmd )
+  {
+        case PIUSB_GETVNDCMD:
+            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
+                pr_info( "copy_from_user failed\n" );
+            dbg( "%s %x\n", "Get Vendor Command = ",ctrl.cmd );
+            retval = usb_control_msg( pdx->udev, usb_rcvctrlpipe( pdx->udev, 0 ), ctrl.cmd,
+                            USB_DIR_IN, 0, 0, &devRB,  ctrl.numbytes, HZ*10 );
+            if( ctrl.cmd == 0xF1 )
+            {
+                dbg( "FW Version returned from HW = %ld.%ld", (devRB>>8),(devRB&0xFF) );
+            }
+            mutex_unlock(&ioctl_mutex);
+            return devRB;
+        case PIUSB_SETVNDCMD:
+            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
+                pr_info( "copy_from_user failed\n" );
+            dbg( "%s %x", "Set Vendor Command = ",ctrl.cmd );
+            controlData = ( ctrl.pData[1] << 8 ) | ctrl.pData[0];
+            dbg( "%s %d", "Vendor Data =",controlData );
+            retval = usb_control_msg( pdx->udev,
+                            usb_sndctrlpipe( pdx->udev, 0 ),
+                            ctrl.cmd,
+                            (USB_DIR_OUT | USB_TYPE_VENDOR ),/* | USB_RECIP_ENDPOINT), */
+                            controlData,
+                            0,
+//                            &dummyCtlBuf, // FIXME: really? pointer to a array pointer?!
+                            dummyCtlBuf,
+                            ctrl.numbytes,
+                            HZ*10 );
+            mutex_unlock(&ioctl_mutex);
+            dbg( "control msg returned %d", retval);
+            return retval;
+            break;
+        case PIUSB_ISHIGHSPEED:
+        	mutex_unlock(&ioctl_mutex);
+            return ( ( pdx->udev->speed == USB_SPEED_HIGH ) ? 1 : 0 );
+            break;
+        case PIUSB_WRITEPIPE:
+        	dbg("PIUSB_WRITEPIPE");
+            if( copy_from_user( &ctrl, (void __user*)arg, _IOC_SIZE( cmd ) ) )
+                pr_info( "copy_from_user WRITE_DUMMY failed\n" );
+            if( !access_ok( VERIFY_READ, ctrl.pData, ctrl.numbytes ) )
+            {
+                dbg("can't access pData" );
+                return 0;
+            }
+            piusb_output( &ctrl, ctrl.pData/*uBuf*/, ctrl.numbytes, pdx );
+            mutex_unlock(&ioctl_mutex);
+            return ctrl.numbytes;
+            break;
+        case PIUSB_USERBUFFER:
+            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
+                pr_info( "copy_from_user failed\n" );
+//            err = MapUserBuffer( (ioctl_struct *) &ctrl, pdx );
+            err = AllocateFrameBuffer( (ioctl_struct *) &ctrl, pdx );
+            mutex_unlock(&ioctl_mutex);
+            return err;
+            break;
+        case PIUSB_UNMAP_USERBUFFER:
+        	dbg("unmapping buffer");
+        	FreeFrameBuffer( pdx );
+//            UnMapUserBuffer( pdx );
+            mutex_unlock(&ioctl_mutex);
+            return 0;
+            break;
+        case PIUSB_READPIPE:
+            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
+                pr_info( "copy_from_user failed\n" );
+        	dbg("PIUSB_READPIPE %d", ctrl.endpoint); // called constantly from the user-space side when acquiring
+            switch( ctrl.endpoint )
+            {
+                case 0://ST133 Pixel Data or PIXIS IO
+                    if( pdx->iama == PIXIS_PID )
+                    {
+                        unsigned int numToRead = 0;
+                        unsigned int totalRead = 0;
+                        uBuf = kmalloc( ctrl.numbytes, GFP_KERNEL );
+                        if( !uBuf )
+                        {
+                            dbg("Alloc for uBuf failed" );
+                            mutex_unlock(&ioctl_mutex);
+                            return 0;
+                        }
+                        numbytes = ctrl.numbytes;
+                        numToRead = numbytes;
+                        dbg( "numbytes to read = %d", numbytes );
+                        dbg( "endpoint # %d", ctrl.endpoint );
+                        if( copy_from_user( uBuf, ctrl.pData, numbytes ) )
+                            dbg("copying ctrl.pData to dummyBuf failed" );
+                        do
+                        {
+                            i = usb_bulk_msg( pdx->udev, pdx->hEP[ctrl.endpoint],(uBuf + totalRead ),
+                                            (numToRead > 64)?64:numToRead,&numbytes, HZ*10 ); //EP0 can only handle 64 bytes at a time
+                            if( i )
+                            {
+                                dbg( "CMD = %s, Address = 0x%02X",((uBuf[3] == 0x02) ? "WRITE":"READ" ), uBuf[1] );
+                                dbg( "Number of bytes Attempted to read = %d", (int)ctrl.numbytes );
+                                dbg( "Blocking Read I/O Failed with status %d", i );
+                                kfree( uBuf );
+                                mutex_unlock(&ioctl_mutex);
+                                return -1;
+                            }
+                            else
+                            {
+                                dbg( "Pixis EP0 Read %d bytes", numbytes );
+                                totalRead += numbytes;
+                                numToRead -= numbytes;
+                            }
+                        }
+                        while( numToRead );
+                        memcpy( ctrl.pData, uBuf, totalRead );
+                        dbg( "Total Bytes Read from PIXIS EP0 = %d", totalRead );
+                        ctrl.numbytes = totalRead;
+                        if( copy_to_user( (ioctl_struct *)arg, &ctrl, sizeof( ioctl_struct ) ) )
+                            dbg("copy_to_user failed in IORB" );
+                        kfree( uBuf );
+                        mutex_unlock(&ioctl_mutex);
+                        return ctrl.numbytes;
+                    }
+                    else //ST133 Pixel Data
+                    {
+                        if( !pdx->gotPixelData )
+                            return 0;
+                        else
+                        {
+                            pdx->gotPixelData = 0;
+                            ctrl.numbytes = pdx->bulk_in_size_returned;
+                            pdx->bulk_in_size_returned -= pdx->frameSize; // FIXME: not sure when this is used??
+                            for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
+                                SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
+                            pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
+                            mutex_unlock(&ioctl_mutex);
+                            return ctrl.numbytes;
+                        }
+                    }
+                    break;
+                case 1://ST133IO
+                case 4://PIXIS IO
+                    uBuf = kmalloc( ctrl.numbytes, GFP_KERNEL );
+                    if( !uBuf )
+                    {
+                        dbg("Alloc for uBuf failed" );
+                        mutex_unlock(&ioctl_mutex);
+                        return 0;
+                    }
+                    numbytes = ctrl.numbytes;
+//          dbg( "numbytes to read = %d", numbytes );
+                    if( copy_from_user( uBuf, ctrl.pData, numbytes ) )
+                        dbg("copying ctrl.pData to dummyBuf failed" );
+                    i = usb_bulk_msg( pdx->udev, pdx->hEP[ctrl.endpoint],uBuf,
+                                numbytes,&numbytes, HZ*10 );
+                    if( i )
+                    {
+                        dbg( "Blocking ReadI/O Failed with status %d", i );
+                        kfree( uBuf );
+                        mutex_unlock(&ioctl_mutex);
+                        return -1;
+                    }
+                    else
+                    {
+                        ctrl.numbytes = numbytes;
+                        memcpy( ctrl.pData, uBuf, numbytes );
+                        if( copy_to_user( (ioctl_struct *)arg, &ctrl, sizeof( ioctl_struct ) ) )
+                            dbg("copy_to_user failed in IORB" );
+                        kfree( uBuf );
+                        mutex_unlock(&ioctl_mutex);
+                        return ctrl.numbytes;
+                    }
+                    break;
+
+                case 2://PIXIS Ping
+                case 3://PIXIS Pong
+                        if( !pdx->gotPixelData ) {
+                        	mutex_unlock(&ioctl_mutex);
+                            return 0;
+                        }
+                        else
+                        {
+                        	struct urb **urbs = pdx->PixelUrb[pdx->active_frame];
+                        	unsigned char *to_buf = pdx->user_buffer[pdx->active_frame];
+
+                            pdx->gotPixelData = 0;
+                            ctrl.numbytes = pdx->bulk_in_size_returned;
+                            pdx->bulk_in_size_returned -= pdx->frameSize;
+
+                            for (i=0; i<pdx->sgEntries[pdx->active_frame]; i++){
+								u16 *buf = (urbs[i]->transfer_buffer);
+								unsigned int length = urbs[i]->actual_length;
+								dbg("Got pixel data of urb %d = %x", i, buf[length/2]);
+								if (copy_to_user(to_buf, buf, length))
+									dbg("failed to copy pixel data of urb %d to user", i);
+								to_buf += length;
+
+								// resubmitting the urb if it must
+								err = usb_submit_urb( urbs[i], GFP_KERNEL ); //resubmit the URB
+								if( err && err != -EPERM )
+								{
+									errCnt++;
+									if( err != lastErr )
+									{
+										dbg("submit urb in callback failed with error code %d", -err );
+										lastErr = err;
+									}
+								} else if (err == -EPERM)
+									dbg("submit urb in callback failed, due to shutdown" );
+
+                            }
+                            // DEBUG
+//                            for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
+//                                SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
+                            pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
+                            mutex_unlock(&ioctl_mutex);
+                            dbg("return %lu bytes of data", ctrl.numbytes);
+                            return ctrl.numbytes;
+                        }
+                        break;
+            }
+            break;
+        case PIUSB_WHATCAMERA:
+        	mutex_unlock(&ioctl_mutex);
+            return pdx->iama;
+        case PIUSB_SETFRAMESIZE:
+            if( copy_from_user( &ctrl, (void __user*)arg, sizeof( ioctl_struct ) ) )
+                pr_info( "copy_from_user failed\n" );
+            pdx->frameSize = ctrl.numbytes;
+            pdx->num_frames = ctrl.numFrames;
+            dbg("PIUSB_SETFRAMESIZE to %dx%lu", ctrl.numFrames, ctrl.numbytes);
+            // TODO: this should probably free it if it already exists, instead of skipping it (num_frames might be different from before)
+            if( !pdx->sgl )
+                pdx->sgl = kmalloc( sizeof ( struct scatterlist *) * pdx->num_frames, GFP_KERNEL );
+            if( !pdx->sgEntries )
+                pdx->sgEntries = kmalloc( sizeof( unsigned int ) * pdx->num_frames, GFP_KERNEL );
+            if( !pdx->PixelUrb )
+                pdx->PixelUrb = kmalloc( sizeof( struct urb **) * pdx->num_frames, GFP_KERNEL );
+            if( !pdx->maplist_numPagesMapped )
+                pdx->maplist_numPagesMapped = vmalloc( sizeof( unsigned int ) * pdx->num_frames );
+            if( !pdx->pendedPixelUrbs )
+                pdx->pendedPixelUrbs = kmalloc( sizeof( char *) * pdx->num_frames, GFP_KERNEL );
+            if( !pdx->user_buffer)
+                pdx->user_buffer = kmalloc( sizeof(unsigned char *) * pdx->num_frames, GFP_KERNEL );
+            mutex_unlock(&ioctl_mutex);
+            return 0;
+        default:
+            dbg( "%s\n", "No IOCTL found" );
+            break;
+
+    }
+    /* return that we did not understand this ioctl call */
+    dbg( "Returning -ENOTTY" );
+    mutex_unlock(&ioctl_mutex);
+    return -ENOTTY;
+}
+
+static void piusb_delete (struct kref *kref)
+{
+    struct device_extension *pdx = to_pi_dev(kref);
+
+	dev_dbg(&pdx->udev->dev, "%s\n", __func__);
+    usb_put_dev(pdx->udev);
+    kfree(pdx);
+}
+
+static int piusb_open (struct inode *inode, struct file *file)
+{
+    struct device_extension *pdx = NULL;
+    struct usb_interface *interface;
+    int subminor;
+    int retval = 0;
+
+    dbg( "Piusb_Open()" );
+    subminor = iminor(inode);
+    interface = usb_find_interface (&piusb_driver, subminor);
+    if (!interface)
+    {
+        err ("%s - error, can't find device for minor %d", __FUNCTION__, subminor);
+        retval = -ENODEV;
+        goto exit_no_device;
+    }
+
+    pdx = usb_get_intfdata(interface);
+    if (!pdx)
+    {
+        retval = -ENODEV;
+        goto exit_no_device;
+    }
+    dbg( "Alternate Setting = %d", interface->num_altsetting );
+
+    pdx->frameIdx = pdx->urbIdx = 0;
+    pdx->gotPixelData = 0;
+    pdx->pendingWrite = 0; // FIXME: never read
+    pdx->frameSize = 0;
+    pdx->num_frames = 0;
+    pdx->active_frame = 0;
+    pdx->bulk_in_byte_trk = 0;
+    pdx->userBufMapped = 0; // FIXME: never read
+    pdx->pendedPixelUrbs = NULL;
+    pdx->sgEntries = NULL;
+    pdx->sgl = NULL;
+    pdx->maplist_numPagesMapped = NULL;
+    pdx->PixelUrb = NULL;
+    pdx->bulk_in_size_returned = 0;
+    /* increment our usage count for the device */
+    kref_get(&pdx->kref);
+    /* save our object in the file's private structure */
+    file->private_data = pdx;
+exit_no_device:
+    return retval;
+}
+
+/**
+ *  piusb_release
+ */
+static int piusb_release (struct inode *inode, struct file *file)
+{
+    struct device_extension *pdx;
+    int retval = 0;
+
+    dbg( "Piusb_Release()" );
+    pdx = (struct device_extension *)file->private_data;
+    if (pdx == NULL)
+    {
+        dbg ("%s - object is NULL", __func__);
+        return -ENODEV;
+    }
+  /* decrement the count on our device */
+    kref_put(&pdx->kref, piusb_delete);
+    return retval;
+}
+
+/*
+ * File operations needed when we register this driver.
+ * This assumes that this driver NEEDS file operations,
+ * of course, which means that the driver is expected
+ * to have a node in the /dev directory. This is for the
+ * IOCTL interface.
+ */
+static struct file_operations piusb_fops = {
+	/*
+	 * The owner field is part of the module-locking
+	 * mechanism. The idea is that the kernel knows
+	 * which module to increment the use-counter of
+	 * BEFORE it calls the device's open() function.
+	 * This also means that the kernel can decrement
+	 * the use-counter again before calling release()
+	 * or should the open() function fail.
+	 */
+	.owner =	THIS_MODULE,
+	.unlocked_ioctl =	piusb_ioctl,
+	.open =		piusb_open,
+	.release =	piusb_release,
+};
+
+/*
+ * usb class driver info in order to get a minor number from the usb core,
+ * and to have the device registered with devfs and the driver core
+ */
+static struct usb_class_driver piusb_class = {
+	.name =		"usb/rspiusb%d",
+	.fops =		&piusb_fops,
+	.minor_base =	PIUSB_MINOR_BASE,
+};
+
+/* table of devices that work with this driver */
+static struct usb_device_id pi_device_table [] = {
+	{ USB_DEVICE( APA_VID, ST133_PID ) },
+	{ USB_DEVICE( APA_VID, PIXIS_PID ) },
+	{ }					/* Terminating entry */
+};
+MODULE_DEVICE_TABLE (usb, pi_device_table);
+
+/**
+ *  piusb_probe
+ *
+ *  Called by the usb core when a new device is connected that it thinks
+ *  this driver might be interested in.
+ */
+static int piusb_probe(struct usb_interface *interface, const struct usb_device_id *id)
+{
+    struct device_extension *pdx = NULL;
+    struct usb_host_interface *iface_desc;
+    struct usb_endpoint_descriptor *endpoint;
+    int i;
+    int retval = -ENOMEM;
+
+    dev_dbg(&interface->dev, "%s - Looking for PI USB Hardware", __func__);
+
+    pdx = kzalloc( sizeof( struct device_extension ), GFP_KERNEL );
+    if( pdx == NULL )
+    {
+    	dev_err(&interface->dev, "Out of memory\n");
+        goto error;
+    }
+    kref_init( &pdx->kref );
+    pdx->udev = usb_get_dev( interface_to_usbdev(interface));
+    pdx->interface = interface;
+    iface_desc = interface->cur_altsetting;
+
+    /* See if the device offered us matches what we can accept */
+    if ((pdx->udev->descriptor.idVendor != APA_VID) ||
+    	((pdx->udev->descriptor.idProduct != PIXIS_PID) &&
+         (pdx->udev->descriptor.idProduct != ST133_PID )))
+        return -ENODEV;
+
+    pdx->iama = pdx->udev->descriptor.idProduct;
+
+    if( debug )
+    {
+        if( pdx->udev->descriptor.idProduct == PIXIS_PID )
+            dbg("PIUSB:Pixis Camera Found" );
+        else
+            dbg("PIUSB:ST133 USB Controller Found" );
+        if( pdx->udev->speed  == USB_SPEED_HIGH )
+            dbg("Highspeed(USB2.0) Device Attached" );
+        else
+            dbg("Lowspeed (USB1.1) Device Attached" );
+
+        dbg( "NumEndpoints in Configuration: %d", iface_desc->desc.bNumEndpoints );
+    }
+    for (i = 0; i < iface_desc->desc.bNumEndpoints; i++) {
+        endpoint = &iface_desc->endpoint[i].desc;
+        if( debug )
+        {
+        dbg( "Endpoint[%d]->bDescriptorType = %d", i, endpoint->bDescriptorType );
+            dbg( "Endpoint[%d]->bEndpointAddress = 0x%02X", i, endpoint->bEndpointAddress );
+        dbg( "Endpoint[%d]->bbmAttributes = %d", i, endpoint->bmAttributes );
+        dbg( "Endpoint[%d]->MaxPacketSize = %d\n", i, endpoint->wMaxPacketSize );
+        }
+        if(usb_endpoint_xfer_bulk(endpoint))
+        {
+            if(usb_endpoint_dir_in(endpoint))
+                pdx->hEP[i] = usb_rcvbulkpipe( pdx->udev, endpoint->bEndpointAddress );
+            else
+                pdx->hEP[i] = usb_sndbulkpipe( pdx->udev, endpoint->bEndpointAddress );
+        }
+    }
+    usb_set_intfdata( interface, pdx );
+    retval = usb_register_dev( interface, &piusb_class );
+    if( retval )
+    {
+        pr_err( "Not able to get a minor for this device." );
+        usb_set_intfdata( interface, NULL );
+        goto error;
+    }
+    pdx->present = 1;
+
+    /* we can register the device now, as it is ready */
+    pdx->minor = interface->minor;
+    /* let the user know what node this device is now attached to */
+    dbg ("PI USB2.0 device now attached to piusb-%d", pdx->minor);
+    return 0;
+
+error:
+    if( pdx )
+        kref_put( &pdx->kref, piusb_delete );
+    return retval;
+}
+
+/**
+ *  piusb_disconnect
+ *
+ *  Called by the usb core when the device is removed from the system.
+ *
+ *  This routine guarantees that the driver will not submit any more urbs
+ *  by clearing pdx->udev.  It is also supposed to terminate any currently
+ *  active urbs.  Unfortunately, usb_bulk_msg(), used in piusb_read(), does
+ *  not provide any way to do this.  But at least we can cancel an active
+ *  write.
+ */
+static void piusb_disconnect(struct usb_interface *interface)
+{
+    struct device_extension *pdx;
+    int minor = interface->minor;
+
+    mutex_lock(&ioctl_mutex);
+    pdx = usb_get_intfdata (interface);
+    usb_set_intfdata (interface, NULL);
+    /* give back our minor */
+    usb_deregister_dev (interface, &piusb_class);
+    /* prevent device read, write and ioctl */
+    pdx->present = 0;
+    mutex_unlock(&ioctl_mutex);
+
+    kref_put(&pdx->kref, piusb_delete);
+    dbg("PI USB2.0 device #%d now disconnected\n", minor);
+}
+
+static struct usb_driver piusb_driver = {
+	.name =		    "rspiusb",
+	.probe =	    piusb_probe,
+	.disconnect =	    piusb_disconnect,
+	.id_table =	    pi_device_table,
+};
+
+
+static int __init piusb_init(void)
+{
+	int result;
+
+	lastErr = 0;
+	errCnt = 0;
+
+	/* register this driver with the USB subsystem */
+	result = usb_register(&piusb_driver);
+	if (result)
+		printk(KERN_ERR KBUILD_MODNAME
+				": usb_register failed. Error number %d\n",
+				result);
+	else
+		printk(KERN_INFO KBUILD_MODNAME ": %s %s\n", DRIVER_DESC, DRIVER_VERSION);
+	return result;
+}
+
+static void __exit piusb_exit(void)
+{
+    /* deregister this driver with the USB subsystem */
+    usb_deregister(&piusb_driver);
+}
+
 module_init ( piusb_init );
 module_exit ( piusb_exit );
 
-MODULE_AUTHOR(DRIVER_AUTHOR);
+/* Module parameters */
+module_param(debug, int, 0 );
+MODULE_PARM_DESC(debug, "Debug enabled or not");
+
+MODULE_AUTHOR("Princeton Instruments");
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL v2");
 
