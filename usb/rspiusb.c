@@ -651,20 +651,27 @@ static void piusb_readPIXEL_callback ( struct urb *urb )
 } 
 
 
-# if 0
-static int pixis_io(struct ioctl_struct *ctrl, struct device_extension *pdx,
-		struct ioctl_struct *arg)
+static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
+		ioctl_struct *arg)
 {
-	unsigned int numToRead = 0;
+	struct usb_host_endpoint *ep;
+	unsigned int numToRead, maxPacketSize;
 	unsigned int totalRead = 0;
 	unsigned char *uBuf;
 	int numbytes;
-	int i;
+	int ret;
+
+	// TODO: see if it is needed to cut it in small pieces, usb_bulk_msg is
+	// supposed to automatically do this
+	ep = usb_pipe_endpoint(pdx->udev, pdx->hEP[ctrl->endpoint]);
+	if (!ep)
+		return -ENOENT;
+	maxPacketSize = usb_endpoint_maxp(&ep->desc);
 
 	uBuf = kmalloc(ctrl->numbytes, GFP_KERNEL);
 	if (!uBuf) {
 		dbg("Alloc for uBuf failed");
-		return 0;
+		return -ENOMEM;
 	}
 	numbytes = (int) ctrl->numbytes;
 	numToRead = (unsigned int) ctrl->numbytes;
@@ -673,51 +680,56 @@ static int pixis_io(struct ioctl_struct *ctrl, struct device_extension *pdx,
 
 	if (copy_from_user(uBuf, ctrl->pData, numbytes)) {
 		dbg("copying ctrl->pData to dummyBuf failed");
+		kfree(uBuf);
 		return -EFAULT;
 	}
 
 	do {
-		i = usb_bulk_msg(pdx->udev, pdx->hEP[ctrl->endpoint],
+		ret = usb_bulk_msg(pdx->udev, pdx->hEP[ctrl->endpoint],
 				(uBuf + totalRead),
 				/* EP0 can only handle 64 bytes at a time */
-				(numToRead > 64) ? 64 : numToRead,
+				min(numToRead, maxPacketSize),
 				&numbytes, HZ * 10);
-		if (i) {
+		if (ret) {
 			dbg("CMD = %s, Address = 0x%02X",
 					((uBuf[3] == 0x02) ? "WRITE" : "READ"),
 					uBuf[1]);
 			dbg("Number of bytes Attempted to read = %d",
 					(int)ctrl->numbytes);
-			dbg("Blocking ReadI/O Failed with status %d", i);
+			dbg("Blocking ReadI/O Failed with status %d", ret);
 			kfree(uBuf);
-			return -1;
+			return ret;
 		}
-		dbg("Pixis EP0 Read %d bytes", numbytes);
+		dbg("EP Read %d bytes", numbytes);
 		totalRead += numbytes;
 		numToRead -= numbytes;
 	} while (numToRead);
 
 	memcpy(ctrl->pData, uBuf, totalRead);
-	dbg("Total Bytes Read from PIXIS EP0 = %d", totalRead);
+	dbg("Total Bytes Read from EP[%d] = %d", ctrl->endpoint, totalRead);
 	ctrl->numbytes = totalRead;
 
-	if (copy_to_user(arg, ctrl, sizeof(struct ioctl_struct)))
+	if (copy_to_user(arg, ctrl, sizeof(ioctl_struct))) {
 		dbg("copy_to_user failed in IORB");
+		kfree(uBuf);
+		return -EFAULT;
+	}
 
 	kfree(uBuf);
 	return ctrl->numbytes;
 }
 
-
-static int pixel_data(struct ioctl_struct *ctrl, struct device_extension *pdx)
+#if 0
+static int get_pixel_data(struct device_extension *pdx)
 {
 	int i;
+	unsigned long numbytes;
 
 	if (!pdx->gotPixelData)
 		return 0;
 
 	pdx->gotPixelData = 0;
-	ctrl->numbytes = pdx->bulk_in_size_returned;
+	numbytes = pdx->bulk_in_size_returned;
 	pdx->bulk_in_size_returned -= pdx->frameSize;
 
 	for (i = 0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++)
@@ -725,7 +737,47 @@ static int pixel_data(struct ioctl_struct *ctrl, struct device_extension *pdx)
 
 	pdx->active_frame = ((pdx->active_frame + 1) % pdx->num_frames);
 
-	return ctrl->numbytes;
+	return numbytes;
+}
+#else
+static int get_pixel_data(struct device_extension *pdx)
+{
+	struct urb **urbs = pdx->PixelUrb[pdx->active_frame];
+	unsigned char *to_buf = pdx->user_buffer[pdx->active_frame];
+	unsigned long numbytes;
+	int i, err;
+
+	if (!pdx->gotPixelData)
+		return 0; /* not yet */
+
+	pdx->gotPixelData = 0;
+	numbytes = pdx->bulk_in_size_returned;
+	pdx->bulk_in_size_returned -= pdx->frameSize;
+
+	for (i=0; i<pdx->sgEntries[pdx->active_frame]; i++){
+		u16 *buf = (urbs[i]->transfer_buffer);
+		unsigned int length = urbs[i]->actual_length;
+
+		dbg("Got pixel data of urb %d = %x", i, buf[length/2]);
+		if (copy_to_user(to_buf, buf, length))
+			dbg("failed to copy pixel data of urb %d to user", i);
+		to_buf += length;
+
+		/* try to resubmitting the urb (will fail if buffer is unmapped */
+		err = usb_submit_urb(urbs[i], GFP_KERNEL);
+		if (err && err != -EPERM) {
+			errCnt++;
+			if(err != lastErr) {
+				dbg("submit urb failed with error code %d", -err);
+				lastErr = err;
+			}
+		} else if (err == -EPERM)
+			dbg("submit urb cancelled");
+	}
+
+	pdx->active_frame = ((pdx->active_frame + 1) % pdx->num_frames);
+	dbg("return %lu bytes of data", numbytes);
+	return numbytes;
 }
 #endif
 
@@ -734,13 +786,10 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
     struct device_extension *pdx;
     char dummyCtlBuf[] = {0,0,0,0,0,0,0,0};
     u16 devRB=0;
-    int i = 0;
     int err = 0;
     long retval = 0;
     ioctl_struct ctrl;
-    unsigned char *uBuf;
-    int numbytes = 0;
-    unsigned short controlData = 0;
+    unsigned short controlData;
 
     pdx = (struct device_extension *)file->private_data;
     mutex_lock(&ioctl_mutex);
@@ -851,158 +900,43 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
             break;
 
         case PIUSB_READPIPE:
+        	/* Called to receive data from the camera */
             if (copy_from_user(&ctrl, (void __user*)arg, sizeof(ioctl_struct))) {
                 pr_info("copy_from_user failed\n");
                 retval = -EFAULT;
 				goto done;
     		}
-        	dbg("PIUSB_READPIPE %d", ctrl.endpoint); // called constantly from the user-space side when acquiring
-            switch( ctrl.endpoint )
-            {
-                case 0://ST133 Pixel Data or PIXIS IO
-                    if( pdx->iama == PIXIS_PID )
-                    {
-                        unsigned int numToRead = 0;
-                        unsigned int totalRead = 0;
-                        uBuf = kmalloc( ctrl.numbytes, GFP_KERNEL );
-                        if( !uBuf )
-                        {
-                            dbg("Alloc for uBuf failed" );
-                            retval = -EFAULT;
-            				goto done;
-                        }
-                        numbytes = ctrl.numbytes;
-                        numToRead = numbytes;
-                        dbg( "numbytes to read = %d", numbytes );
-                        dbg( "endpoint # %d", ctrl.endpoint );
-                        if( copy_from_user( uBuf, ctrl.pData, numbytes ) )
-                            dbg("copying ctrl.pData to dummyBuf failed" );
-                        do {
-                            i = usb_bulk_msg( pdx->udev, pdx->hEP[ctrl.endpoint],(uBuf + totalRead ),
-                                            (numToRead > 64)?64:numToRead,&numbytes, HZ*10 ); //EP0 can only handle 64 bytes at a time
-                            if( i )
-                            {
-                                dbg( "CMD = %s, Address = 0x%02X",((uBuf[3] == 0x02) ? "WRITE":"READ" ), uBuf[1] );
-                                dbg( "Number of bytes Attempted to read = %d", (int)ctrl.numbytes );
-                                dbg( "Blocking Read I/O Failed with status %d", i );
-                                kfree( uBuf );
-                                retval = -EFAULT;
-                                goto done;
-                            }
-                            else
-                            {
-                                dbg( "Pixis EP0 Read %d bytes", numbytes );
-                                totalRead += numbytes;
-                                numToRead -= numbytes;
-                            }
-                        } while( numToRead );
-                        memcpy( ctrl.pData, uBuf, totalRead );
-                        dbg( "Total Bytes Read from PIXIS EP0 = %d", totalRead );
-                        ctrl.numbytes = totalRead;
-                        if( copy_to_user( (ioctl_struct *)arg, &ctrl, sizeof( ioctl_struct ) ) )
-                            dbg("copy_to_user failed in IORB" );
-                        kfree( uBuf );
-                        retval = ctrl.numbytes;
-                    }
-                    else //ST133 Pixel Data
-                    {
-                        if( !pdx->gotPixelData )
-                        	goto done;
-                        else
-                        {
-                            pdx->gotPixelData = 0;
-                            ctrl.numbytes = pdx->bulk_in_size_returned;
-                            pdx->bulk_in_size_returned -= pdx->frameSize; // FIXME: not sure when this is used??
-                            for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
-                                SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
-                            pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
-                            retval = ctrl.numbytes;
-                        }
-                    }
-                    break;
-                case 1://ST133IO
-                case 4://PIXIS IO
-                    uBuf = kmalloc( ctrl.numbytes, GFP_KERNEL );
-                    if( !uBuf )
-                    {
-                        dbg("Alloc for uBuf failed" );
-                        retval = -EFAULT;
-        				goto done;
-                    }
-                    numbytes = ctrl.numbytes;
-//          dbg( "numbytes to read = %d", numbytes );
-                    if( copy_from_user( uBuf, ctrl.pData, numbytes ) )
-                        dbg("copying ctrl.pData to dummyBuf failed" );
-                    i = usb_bulk_msg( pdx->udev, pdx->hEP[ctrl.endpoint],uBuf,
-                                numbytes,&numbytes, HZ*10 );
-                    if( i )
-                    {
-                        dbg( "Blocking ReadI/O Failed with status %d", i );
-                        kfree( uBuf );
-                        retval = -EFAULT;
-        				goto done;
-                    }
-                    else
-                    {
-                        ctrl.numbytes = numbytes;
-                        memcpy( ctrl.pData, uBuf, numbytes );
-                        if( copy_to_user( (ioctl_struct *)arg, &ctrl, sizeof( ioctl_struct ) ) )
-                            dbg("copy_to_user failed in IORB" );
-                        kfree( uBuf );
-                        mutex_unlock(&ioctl_mutex);
-                        return ctrl.numbytes;
-                    }
-                    break;
+        	dbg("PIUSB_READPIPE %d", ctrl.endpoint);
 
+        	/* Depending on the camera, endpoints have different meanings */
+        	if (pdx->iama == PIXIS_PID) {
+        		switch(ctrl.endpoint) {
+				case 0: // PIXIS IO EP0
+                case 4: // PIXIS IO EP4
+					retval = piusb_read_io(&ctrl, pdx, (ioctl_struct *)arg);
+					break;
                 case 2://PIXIS Ping
-                case 3://PIXIS Pong
-                        if( !pdx->gotPixelData ) {
-            				goto done;
-                        }
-                        else
-                        {
-                        	struct urb **urbs = pdx->PixelUrb[pdx->active_frame];
-                        	unsigned char *to_buf = pdx->user_buffer[pdx->active_frame];
-
-                            pdx->gotPixelData = 0;
-                            ctrl.numbytes = pdx->bulk_in_size_returned;
-                            pdx->bulk_in_size_returned -= pdx->frameSize;
-
-                            for (i=0; i<pdx->sgEntries[pdx->active_frame]; i++){
-								u16 *buf = (urbs[i]->transfer_buffer);
-								unsigned int length = urbs[i]->actual_length;
-								dbg("Got pixel data of urb %d = %x", i, buf[length/2]);
-								if (copy_to_user(to_buf, buf, length))
-									dbg("failed to copy pixel data of urb %d to user", i);
-								to_buf += length;
-
-								// resubmitting the urb if it must
-								err = usb_submit_urb( urbs[i], GFP_KERNEL ); //resubmit the URB
-								if( err && err != -EPERM )
-								{
-									errCnt++;
-									if( err != lastErr )
-									{
-										dbg("submit urb in callback failed with error code %d", -err );
-										lastErr = err;
-									}
-								} else if (err == -EPERM)
-									dbg("submit urb in callback failed, due to shutdown" );
-
-                            }
-                            // DEBUG
-//                            for( i=0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++ )
-//                                SetPageDirty( sg_page(&(pdx->sgl[pdx->active_frame][i])) );
-                            pdx->active_frame = ( ( pdx->active_frame + 1 ) % pdx->num_frames );
-                            mutex_unlock(&ioctl_mutex);
-                            dbg("return %lu bytes of data", ctrl.numbytes);
-                            return ctrl.numbytes;
-                        }
-                default:
+				case 3://PIXIS Pong
+					retval = get_pixel_data(pdx);
+					break;
+				default:
                 	retval = -EINVAL;
                 	break;
-            }
-            break;
+        		}
+        	} else { /* ST133 */
+        		switch(ctrl.endpoint) {
+				case 0://ST133 Pixel Data
+					retval = get_pixel_data(pdx);
+					break;
+				case 1://ST133 IO
+					retval = piusb_read_io(&ctrl, pdx, (ioctl_struct *)arg);
+					break;
+				default:
+                	retval = -EINVAL;
+                	break;
+        		}
+        	}
+        	break;
 
         case PIUSB_WHATCAMERA:
             retval = pdx->iama;
