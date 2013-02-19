@@ -1,6 +1,7 @@
 /* piusb.h */
 
 #include <linux/ioctl.h>
+#include <linux/kernel.h>
 
 #define to_pi_dev(d) container_of( d, struct device_extension, kref )
 
