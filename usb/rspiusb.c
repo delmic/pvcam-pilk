@@ -648,25 +648,15 @@ static void piusb_readPIXEL_callback ( struct urb *urb )
 //			return;
 //		} else if (err == -EPERM)
 //			dbg("submit urb in callback failed, due to shutdown" );
-} 
+}
 
 
 static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
 		ioctl_struct *arg)
 {
-	struct usb_host_endpoint *ep;
-	unsigned int numToRead, maxPacketSize;
-	unsigned int totalRead = 0;
 	unsigned char *uBuf;
 	int numbytes;
 	int ret;
-
-	// TODO: see if it is needed to cut it in small pieces, usb_bulk_msg is
-	// supposed to automatically do this
-	ep = usb_pipe_endpoint(pdx->udev, pdx->hEP[ctrl->endpoint]);
-	if (!ep)
-		return -ENOENT;
-	maxPacketSize = usb_endpoint_maxp(&ep->desc);
 
 	uBuf = kmalloc(ctrl->numbytes, GFP_KERNEL);
 	if (!uBuf) {
@@ -674,57 +664,31 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
 		return -ENOMEM;
 	}
 	numbytes = (int) ctrl->numbytes;
-	numToRead = (unsigned int) ctrl->numbytes;
 	dbg("numbytes to read = %d", numbytes);
-	dbg("endpoint # %d", ctrl->endpoint);
 
+	// FIXME: why reading this data? is it sent? left-over from piusb_write_bulk()?
 	if (copy_from_user(uBuf, ctrl->pData, numbytes)) {
-		dbg("copying ctrl->pData to dummyBuf failed");
+		dbg("copying ctrl->pData to uBuf failed");
 		kfree(uBuf);
 		return -EFAULT;
 	}
-#if 0
-	do {
-		ret = usb_bulk_msg(pdx->udev, pdx->hEP[ctrl->endpoint],
-				(uBuf + totalRead),
-				/* EP0 can only handle 64 bytes at a time */
-				min(numToRead, maxPacketSize),
-				&numbytes, HZ * 10);
-		if (ret) {
-			dbg("CMD = %s, Address = 0x%02X",
-					((uBuf[3] == 0x02) ? "WRITE" : "READ"),
-					uBuf[1]);
-			dbg("Number of bytes Attempted to read = %d",
-					(int)ctrl->numbytes);
-			dbg("Blocking ReadI/O Failed with status %d", ret);
-			kfree(uBuf);
-			return ret;
-		}
-		dbg("EP Read %d bytes", numbytes);
-		totalRead += numbytes;
-		numToRead -= numbytes;
-	} while (numToRead);
-#else
 	ret = usb_bulk_msg(pdx->udev, pdx->hEP[ctrl->endpoint],
-			uBuf,
-			numToRead,
-			&numbytes, HZ * 10);
+			           uBuf, numbytes, &numbytes, HZ * 10);
 	if (ret) {
+		// FIXME: that's pretty strange message, knowing that uBuf has not been sent??
 		dbg("CMD = %s, Address = 0x%02X",
 				((uBuf[3] == 0x02) ? "WRITE" : "READ"),
 				uBuf[1]);
-		dbg("Number of bytes Attempted to read = %lu", ctrl->numbytes);
+		dbg("Number of bytes Attempted to read = %d", numbytes);
 		dbg("Blocking ReadI/O Failed with status %d", ret);
 		kfree(uBuf);
 		return ret;
 	}
 	dbg("EP Read %d bytes", numbytes);
-	totalRead = numbytes;
-#endif
 
-	memcpy(ctrl->pData, uBuf, totalRead);
-	dbg("Total Bytes Read from EP[%d] = %d", ctrl->endpoint, totalRead);
-	ctrl->numbytes = totalRead;
+	memcpy(ctrl->pData, uBuf, numbytes);
+	dbg("Total Bytes Read from EP[%d] = %d", ctrl->endpoint, numbytes);
+	ctrl->numbytes = numbytes;
 
 	if (copy_to_user(arg, ctrl, sizeof(ioctl_struct))) {
 		dbg("copy_to_user failed in IORB");
@@ -859,7 +823,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 				goto done;
     		}
             controlData = (ctrl.pData[1] << 8) | ctrl.pData[0];
-            dbg( "Set Vendor Command = %x -> %d",ctrl.cmd, controlData);
+            dbg( "Set Vendor Command = %x -> %d", ctrl.cmd, controlData);
 
             // TODO: not clear whether ctrl.numbytes is supposed to be the size of
             // ctrl.pData of the amount of extra (null) data to send. My guess
