@@ -1,4 +1,4 @@
-# This file should be placed in /etc/udev/rules.d and the group PISE should exist
+# This file should be placed in /etc/udev/rules.d and the group 'video' should exist
 # (or the lines updated)
-SUBSYSTEMS="usb", ATTRS{idProduct}="a010", ATTRS{idVendor}="0bd7", GROUP="PISE", MODE="0666"
-SUBSYSTEMS="usb", ATTRS{idProduct}="a026", ATTRS{idVendor}="0bd7", GROUP="PISE", MODE="0666"
+SUBSYSTEMS="usb", ATTRS{idProduct}="a010", ATTRS{idVendor}="0bd7", GROUP="video", MODE="0666"
+SUBSYSTEMS="usb", ATTRS{idProduct}="a026", ATTRS{idVendor}="0bd7", GROUP="video", MODE="0666"

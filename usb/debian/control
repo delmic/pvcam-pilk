@@ -1,0 +1,17 @@
+Source: pvcam-pilk-usb-dkms
+Section: contrib/kernel
+Priority: extra
+Maintainer: Éric Piel <piel@delmic.com>
+Build-Depends: debhelper (>= 8), dkms
+Standards-Version: 3.9.2
+
+Package: pvcam-pilk-usb-dkms
+Architecture: all
+Depends: ${misc:Depends}, dkms
+Description: kernel module for Princeton Instruments USB cameras
+ This is the low-level driver for the Princeton Instruments USB cameras (PIXIS
+ and ST133). Software that communicate with these hardware also need the
+ libpvcam from Princeton Instruments
+ .
+ This package contains the dkms sources. When installed, it will build
+ the module for your kernel.

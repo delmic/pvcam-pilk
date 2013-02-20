@@ -1,0 +1,6 @@
+PACKAGE_NAME="pvcam-pilk-usb"
+PACKAGE_VERSION="@VERSION@"
+MAKE="make"
+CLEAN="make clean"
+DEST_MODULE_LOCATION[0]="/extra"
+AUTOINSTALL="yes"

@@ -1,0 +1,34 @@
+Format: http://dep.debian.net/deps/dep5
+Upstream-Name: pvcam-pilk
+Upstream-Contact: Éric Piel <piel@delmic.com>
+Source: https://github.com/delmic/pvcam-pilk
+
+#Files: pci/*
+#Copyright: 2002-2008, Princeton Instuments
+#License: Proprietary
+
+Files: *
+Copyright: 2005-2010, Princeton Instuments
+  2013, Éric Piel <piel@delmic.com>
+License: GPL-2
+
+Files: debian/*
+Copyright: 2013, Éric Piel <piel@delmic.com>
+License: GPL-2
+
+License: GPL-2
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the
+ Free Software Foundation version 2.
+ .
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ General Public License for more details.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ (GPL) version 2 can be found in "/usr/share/common-licenses/GPL-2".
+ .
+ You should have received a copy of the GNU General Public License along
+ with this program.  If not, see <http://www.gnu.org/licenses/>.
+

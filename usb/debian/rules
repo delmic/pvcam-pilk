@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+%:
+        dh $@
+
+override_dh_auto_build:
+        :
+        
+debian/pvcam-pilk-usb-dkms.dkms: debian/pvcam-pilk-usb-dkms.dkms.in
+	sed s/@VERSION@/$(DEB_UPSTREAM_VERSION)/g $< > $@
+
+install/pvcam-pilk-usb-dkms: debian/pvcam-pilk-usb-dkms.dkms
+        dh_install *.[chS] Makefile usr/src/$(DEB_SOURCE_PACKAGE)-$(DEB_UPSTREAM_VERSION)
+        dh_install 10-pi.rules /lib/udev/rules.d/
+        dh_dkms
+	-rm $<
+
