@@ -56,6 +56,7 @@ struct device_extension {
     int                     num_frames;     /* the number of frames that will fit in the user buffer */
     int                     active_frame;
     unsigned long           frameSize;
+    struct mutex			mutex;			/* acquire it before accessing the device */
     //FX2 specific endpoints
     unsigned int        hEP[8];
 };
