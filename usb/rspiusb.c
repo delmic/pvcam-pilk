@@ -43,7 +43,7 @@
 #define dbg(format, arg...) do { if (debug) printk(KERN_DEBUG "rspiusb: " format "\n" , ## arg); } while (0)
 
 // Reenable to use the userspace <-> kernel DMA mapping (that currently doesn't work)
-//#define USE_DMA_MAPPING
+#define USE_DMA_MAPPING
 
 /* Version Information */
 #define DRIVER_VERSION "V1.0.3"
@@ -169,80 +169,6 @@ static void piusb_read_pixel_callback ( struct urb *urb )
 		} else if (err == -EPERM)
 			dbg("submit urb in callback failed, due to shutdown" );
 }
-
-
-// Next 2 functions are directly from core/usb.c, where they have been
-// disabled because there is no user in-kernel.
-// A possibility would be to use directly dma_(un)map_sg. (pipe is always IN)
-
-/**
- * usb_buffer_map_sg - create scatterlist DMA mapping(s) for an endpoint
- * @dev: device to which the scatterlist will be mapped
- * @is_in: mapping transfer direction
- * @sg: the scatterlist to map
- * @nents: the number of entries in the scatterlist
- *
- * Return value is either < 0 (indicating no buffers could be mapped), or
- * the number of DMA mapping array entries in the scatterlist.
- *
- * The caller is responsible for placing the resulting DMA addresses from
- * the scatterlist into URB transfer buffer pointers, and for setting the
- * URB_NO_TRANSFER_DMA_MAP transfer flag in each of those URBs.
- *
- * Top I/O rates come from queuing URBs, instead of waiting for each one
- * to complete before starting the next I/O.   This is particularly easy
- * to do with scatterlists.  Just allocate and submit one URB for each DMA
- * mapping entry returned, stopping on the first error or when all succeed.
- * Better yet, use the usb_sg_*() calls, which do that (and more) for you.
- *
- * This call would normally be used when translating scatterlist requests,
- * rather than usb_buffer_map(), since on some hardware (with IOMMUs) it
- * may be able to coalesce mappings for improved I/O efficiency.
- *
- * Reverse the effect of this call with usb_buffer_unmap_sg().
- */
-int usb_buffer_map_sg(const struct usb_device *dev, int is_in,
-		      struct scatterlist *sg, int nents)
-{
-	struct usb_bus		*bus;
-	struct device		*controller;
-
-	if (!dev
-			|| !(bus = dev->bus)
-			|| !(controller = bus->controller)
-			|| !controller->dma_mask)
-		return -EINVAL;
-	pr_info( "usb_buffer_map_sg: controller=%p, sg=%p, nents=%d, is_in=%d",
-			controller, sg, nents, is_in);
-
-	/* FIXME generic api broken like pci, can't report errors */
-	return dma_map_sg(controller, sg, nents,
-			is_in ? DMA_FROM_DEVICE : DMA_TO_DEVICE) ? : -ENOMEM;
-}
-
-/**
- * usb_buffer_unmap_sg - free DMA mapping(s) for a scatterlist
- * @dev: device to which the scatterlist will be mapped
- * @is_in: mapping transfer direction
- * @sg: the scatterlist to unmap
- * @n_hw_ents: the positive return value from usb_buffer_map_sg
- *
- * Reverses the effect of usb_buffer_map_sg().
- */
-void usb_buffer_unmap_sg(const struct usb_device *dev, int is_in,
-			 struct scatterlist *sg, int n_hw_ents)
-{
-	struct usb_bus		*bus;
-	struct device		*controller;
-
-	if (!dev
-			|| !(bus = dev->bus)
-			|| !(controller = bus->controller)
-			|| !controller->dma_mask)
-		return;
-
-	dma_unmap_sg(controller, sg, n_hw_ents,
-			is_in ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
 }
 
 /**
@@ -252,8 +178,7 @@ void usb_buffer_unmap_sg(const struct usb_device *dev, int is_in,
  */
 int UnMapUserBuffer( struct device_extension *pdx )
 {
-    int i = 0;
-    int k = 0;
+    int i, k;
     unsigned int epAddr;
     
     for( k = 0; k < pdx->num_frames; k++ )
@@ -287,7 +212,7 @@ int UnMapUserBuffer( struct device_extension *pdx )
         {
             epAddr = pdx->hEP[0];
         }
-        usb_buffer_unmap_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[k], pdx->maplist_numPagesMapped[k] );
+
         //dma_unmap_sg( pdx->udev->bus->controller, pdx->sgl[k], pdx->maplist_numPagesMapped[k], DMA_FROM_DEVICE);
         for( i = 0; i < pdx->maplist_numPagesMapped[k]; i++ )
         {
@@ -333,13 +258,12 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
     unsigned long numbytes;
     int frameInfo; //which frame we're mapping
     unsigned int epAddr = 0;
-    unsigned long count =0;
     int i = 0;
     int k = 0;
     int err = 0;
     int ret;
     struct page **maplist_p;
-    int numPagesRequired;
+    int num_pages;
     frameInfo = io->numFrames;
     uaddr = (unsigned long) io->pData;
     numbytes = io->numbytes;
@@ -361,13 +285,12 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
         epAddr = pdx->hEP[0];
         dbg("ST133 Frame #%d: EP=2",frameInfo );
     }
-    count = numbytes;
     dbg("UserAddress = 0x%08lX", uaddr );
     dbg("numbytes = %d", (int)numbytes );
     //number of pages to map the entire user space DMA buffer
-    numPagesRequired = ((uaddr & ~PAGE_MASK) + count + ~PAGE_MASK) >> PAGE_SHIFT;
-    dbg("Number of pages needed = %d", numPagesRequired );
-    maplist_p = vmalloc( numPagesRequired * sizeof(struct page*));//, GFP_ATOMIC);
+    num_pages = ((uaddr & ~PAGE_MASK) + numbytes + ~PAGE_MASK) >> PAGE_SHIFT;
+    dbg("Number of pages needed = %d", num_pages );
+    maplist_p = vmalloc( num_pages * sizeof(struct page*));
     if (!maplist_p)
     {
         dbg( "Can't Allocate Memory for maplist_p" );
@@ -377,22 +300,22 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
   //map the user buffer to kernel memory
     down_write( &current->mm->mmap_sem ); 
     ret = get_user_pages(current, current->mm, (uaddr & PAGE_MASK),
-                         numPagesRequired, WRITE, 0, //Don't Force
+                         num_pages, WRITE, 0, //Don't Force
                          maplist_p, NULL);
     up_write(&current->mm->mmap_sem );
-    if( numPagesRequired != ret )
+    if( num_pages != ret )
     {
         dbg( "get_user_pages() failed with %d", ret);
         vfree( maplist_p );
         // TODO: put_page
         return -ENOMEM;
     }
-    pdx->maplist_numPagesMapped[frameInfo] = ret;
+    pdx->maplist_numPagesMapped[frameInfo] = num_pages;
     dbg( "Number of pages mapped = %d", pdx->maplist_numPagesMapped[frameInfo] );
-    for( i=0; i < pdx->maplist_numPagesMapped[frameInfo]; i++ )
+    for( i=0; i < num_pages; i++ )
         flush_dcache_page(maplist_p[i]);
     //need to create a scatterlist that spans each frame that can fit into the mapped buffer
-    pdx->sgl[frameInfo] = kmalloc( ( pdx->maplist_numPagesMapped[frameInfo] * sizeof( struct scatterlist ) ), GFP_ATOMIC );
+    pdx->sgl[frameInfo] = kmalloc( ( num_pages * sizeof( struct scatterlist ) ), GFP_ATOMIC );
     if( !pdx->sgl[frameInfo] )
     {
         vfree( maplist_p );
@@ -400,42 +323,46 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
         return -ENOMEM;
     }
     
-    sg_init_table( pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );    
+    sg_init_table( pdx->sgl[frameInfo], num_pages );
     sg_assign_page(&(pdx->sgl[frameInfo][0]), maplist_p[0]);    
     pdx->sgl[frameInfo][0].offset = uaddr & ~PAGE_MASK;
-    if (pdx->maplist_numPagesMapped[frameInfo] > 1)
+    if (num_pages > 1)
     {
+        unsigned long count = numbytes;
         pdx->sgl[frameInfo][0].length = PAGE_SIZE - pdx->sgl[frameInfo][0].offset;
         count -= pdx->sgl[frameInfo][0].length;
-        for (k=1; k < pdx->maplist_numPagesMapped[frameInfo] ; k++)
+        for (k=1; k < num_pages ; k++)
         {
-            sg_assign_page(&(pdx->sgl[frameInfo][k]), maplist_p[k]);
-            pdx->sgl[frameInfo][k].offset = 0;            
-            pdx->sgl[frameInfo][k].length = ( count < PAGE_SIZE ) ? count : PAGE_SIZE;
-            count -= PAGE_SIZE; //example had PAGE_SIZE here;            
+            sg_set_page(&(pdx->sgl[frameInfo][k]), maplist_p[k],
+        		min(count, PAGE_SIZE), 0);
+            count -= pdx->sgl[frameInfo][k].length;
         }
     }
     else
     {
-        pdx->sgl[frameInfo][0].length = count;
+        pdx->sgl[frameInfo][0].length = numbytes;
     }
-    // TODO use usb_sg_init()? usb_buffer_alloc()?
-    // cf ff9c895f07d36193c75533bda8193bde8ca99d02
-
-    //ret = dma_map_sg( pdx->udev->bus->controller, pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo], DMA_FROM_DEVICE);
-    // + check for ret == 0
-    ret = usb_buffer_map_sg( pdx->udev, usb_pipein(epAddr), pdx->sgl[frameInfo], pdx->maplist_numPagesMapped[frameInfo] );
-	if (ret < 0) {
+    /*
+    if (!pdx->udev->bus->controller->dma_mask){
 		vfree(maplist_p);
-		pr_info( "usb_buffer_map_sg failed" );
+	pr_info( "usb controller doesn't support DMA" );
+	return -EINVAL;
+    }
+    dbg("DMA mask = %p", pdx->udev->bus->controller->dma_mask);
+    ret = dma_map_sg(pdx->udev->bus->controller, pdx->sgl[frameInfo],
+		     num_pages, DMA_FROM_DEVICE);
+	if (ret == 0) {
+		vfree(maplist_p);
+		pr_info( "dma_map_sg failed" );
 		return -EINVAL;
 	}
 
 	pdx->sgEntries[frameInfo] = ret;
-    dbg("number of sgEntries = %d", pdx->sgEntries[frameInfo] );
+    dbg("Number of sgEntries = %d", pdx->sgEntries[frameInfo] );
     pdx->userBufMapped = 1;
     vfree( maplist_p );
     
+    // This looks awfully like usb_sg_init()! => use it? (but then there is no callback, just usb_sg_wait in READPIPE, which is different behaviour)
     //Create and Send the URB's for each s/g entry  
     pdx->PixelUrb[frameInfo] = kmalloc( pdx->sgEntries[frameInfo] * sizeof( struct urb *), GFP_KERNEL);
     if( !pdx->PixelUrb[frameInfo] )
@@ -454,15 +381,17 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
                     piusb_read_pixel_callback, 
                     (void *)pdx );
         pdx->PixelUrb[frameInfo][i]->transfer_dma = sg_dma_address( &pdx->sgl[frameInfo][i] );
-        pdx->PixelUrb[frameInfo][i]->transfer_flags = URB_NO_TRANSFER_DMA_MAP/* | URB_NO_INTERRUPT*/;
+        pdx->PixelUrb[frameInfo][i]->transfer_flags = URB_NO_TRANSFER_DMA_MAP; // | URB_NO_INTERRUPT;
     }
-    // TODO: check whethere it should send an interrupt only for the last URB or
+    // TODO: check whether it should send an interrupt only for the last URB or
     // not. It seems the callback expects to be called after every URB (increases
     // the size of the data received).
     //pdx->PixelUrb[frameInfo][i-1]->transfer_flags &= ~URB_NO_INTERRUPT;  //only interrupt when last URB completes
     pdx->pendedPixelUrbs[frameInfo] = kmalloc( ( pdx->sgEntries[frameInfo] * sizeof( char ) ), GFP_KERNEL );
-    if( !pdx->pendedPixelUrbs[frameInfo] )
+    if( !pdx->pendedPixelUrbs[frameInfo] ) {
         dbg( "Can't allocate Memory for pendedPixelUrbs" );
+        return -ENOMEM;
+    }
     for( i = 0; i < pdx->sgEntries[frameInfo]; i++ )
     {
         //err = usb_submit_urb( pdx->PixelUrb[frameInfo][i], GFP_ATOMIC );
@@ -476,6 +405,39 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
         else
             pdx->pendedPixelUrbs[frameInfo][i] = 1;
     }
+    */
+    // all the above can be simplified by letting the usb do it, passing it the sgl
+    pdx->sgEntries[frameInfo] = 1;
+    pdx->PixelUrb[frameInfo] = kmalloc( sizeof( struct urb *), GFP_KERNEL);
+    if( !pdx->PixelUrb[frameInfo] )
+    {
+        dbg( "Can't Allocate Memory for Urb" );
+        return -ENOMEM;
+    }
+    pdx->pendedPixelUrbs[frameInfo] = kmalloc( sizeof( char ) , GFP_KERNEL );
+    if( !pdx->pendedPixelUrbs[frameInfo] ) {
+            dbg( "Can't allocate Memory for pendedPixelUrbs" );
+            return -ENOMEM;
+        }
+    pdx->PixelUrb[frameInfo][0] = usb_alloc_urb( 0, GFP_KERNEL );
+	usb_fill_bulk_urb( pdx->PixelUrb[frameInfo][0],
+			    pdx->udev,
+			    epAddr,
+			    NULL,
+			    numbytes,
+			    piusb_read_pixel_callback,
+			    pdx );
+	pdx->PixelUrb[frameInfo][0]->num_sgs = num_pages;
+	pdx->PixelUrb[frameInfo][0]->sg = pdx->sgl[frameInfo];
+        err = usb_submit_urb( pdx->PixelUrb[frameInfo][0], GFP_KERNEL );
+        if( err )
+        {
+            dbg( "submit urb for entry %d error = %d\n", 0, err);
+            pdx->pendedPixelUrbs[frameInfo][0] = 0;
+            return err;
+        }
+        else
+            pdx->pendedPixelUrbs[frameInfo][0] = 1;
     return 0;
 }
 
