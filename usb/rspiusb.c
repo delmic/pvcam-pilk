@@ -168,7 +168,7 @@ static void piusb_read_pixel_callback ( struct urb *urb )
 			return;
 		} else if (err == -EPERM)
 			dbg("submit urb in callback failed, due to shutdown" );
-}
+	}
 }
 
 /**
@@ -297,7 +297,7 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
         return -ENOMEM;
     }
     // Note: this is similar to videobuf2-dma-contig.c vb2_dc_get_userptr()
-  //map the user buffer to kernel memory
+	//map the user buffer to kernel memory
     down_write( &current->mm->mmap_sem ); 
     ret = get_user_pages(current, current->mm, (uaddr & PAGE_MASK),
                          num_pages, WRITE, 0, //Don't Force
@@ -324,7 +324,7 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
     }
     
     sg_init_table( pdx->sgl[frameInfo], num_pages );
-    sg_assign_page(&(pdx->sgl[frameInfo][0]), maplist_p[0]);    
+    sg_assign_page(&(pdx->sgl[frameInfo][0]), maplist_p[0]);
     pdx->sgl[frameInfo][0].offset = uaddr & ~PAGE_MASK;
     if (num_pages > 1)
     {
@@ -344,7 +344,7 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
     }
     /*
     if (!pdx->udev->bus->controller->dma_mask){
-		vfree(maplist_p);
+	vfree(maplist_p);
 	pr_info( "usb controller doesn't support DMA" );
 	return -EINVAL;
     }
