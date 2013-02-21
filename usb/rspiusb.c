@@ -43,7 +43,7 @@
 #define dbg(format, arg...) do { if (debug) printk(KERN_DEBUG "rspiusb: " format "\n" , ## arg); } while (0)
 
 // Reenable to use the userspace <-> kernel DMA mapping (that currently doesn't work)
-#define USE_DMA_MAPPING
+//#define USE_DMA_MAPPING
 
 /* Version Information */
 #define DRIVER_VERSION "V1.0.3"
