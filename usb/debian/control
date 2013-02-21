@@ -2,6 +2,9 @@ Source: pvcam-pilk-usb-dkms
 Section: contrib/kernel
 Priority: extra
 Maintainer: Éric Piel <piel@delmic.com>
+Homepage: http://www.princetoninstruments.com/products/software/
+Vcs-Browser: https://github.com/delmic/pvcam-pilk
+Vcs-Git: git://github.com/delmic/pvcam-pilk.git
 Build-Depends: debhelper (>= 8), dkms
 Standards-Version: 3.9.2
 

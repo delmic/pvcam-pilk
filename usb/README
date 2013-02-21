@@ -19,10 +19,17 @@ Installation Instructions
 	By default the driver loads when a known PI USB device is powered on.
 	The driver is only accessible to root users.  If a user other than root needs access
 	to the driver, copy the file 10-pi.rules to /etc/udev/rules.d/
-	The default group name is PISE.  Change PISE to the appropriate group name, save the file,
+	The default group name is 'video'.  Change 'video' to the appropriate group name, save the file,
 	and either reboot or run "sudo udevadm control --reload-rules".
 
 
+Debian package generation
+It requires to follow the typical dpkg workflow. In particular, you must ensure
+to have a GPG key and add an entry to the changelog on your name. The usb/
+directory should be renamed pvcam-pilk-usb-VERSION/. Then go to this directory
+and type: 
+dpkg-buildpackage -rfakeroot
 
-
+It will create a DKMS package, which ensures that the module is recompiled 
+everytime the kernel is updated.
 
