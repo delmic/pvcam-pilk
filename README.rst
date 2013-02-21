@@ -1,4 +1,5 @@
-= Princeton Instruments' PVCAM low-level drivers (kernel) for Linux =
+Princeton Instruments' PVCAM low-level drivers (kernel) for Linux
+=================================================================
 
 There are two separate drivers, for the PCI-based cameras and the USB-based cameras.
 
