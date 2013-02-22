@@ -514,7 +514,7 @@ int UnMapUserBuffer( struct device_extension *pdx )
 
 /*
  * Maximum size for each allocation block, if it's too big, it might have some
- * fail being allocated. So we use 100 Kb. 1Mb seemed to work fine too, but at
+ * failure being allocated. So we use 100 Kb. 1Mb seemed to work fine too, but at
  * least we are sure to test multiple URBs.
  */
 #define MAX_BUFFER_SIZE (102400)
@@ -526,54 +526,53 @@ int UnMapUserBuffer( struct device_extension *pdx )
 int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 {
 	unsigned long numbytes = io->numbytes; // length of the buffer
-	int frameInfo = io->numFrames; // which frame we're mapping
+	int f = io->numFrames; // which frame we're mapping
 	unsigned int epAddr;
-	int i = 0;
-	int err = 0;
+	int i;
 	int retval = 0;
 	struct urb *urb = NULL;
 	void *buf = NULL;
 	unsigned int buf_size, size_last;
 	int numurb;
 
-	pdx->user_buffer[frameInfo] = io->pData; // address of the user buffer, to copy it back
+	pdx->user_buffer[f] = io->pData; // address of the user buffer, to copy it back
 
 	if( pdx->iama == PIXIS_PID ) { //if so, which EP should we map this frame to
-		if( frameInfo % 2 )//check to see if this should use EP4(PONG)
+		if( f % 2 )//check to see if this should use EP4(PONG)
 			epAddr = pdx->hEP[3];//PONG, odd frames
 		else
 			epAddr = pdx->hEP[2];//PING, even frames and zero
-		dbg("Pixis Frame #%d: EP=%d",frameInfo, (epAddr==pdx->hEP[2]) ? 2 : 4 );
+		dbg("Pixis Frame #%d: EP=%d",f, (epAddr==pdx->hEP[2]) ? 2 : 4 );
 	} else { //ST133 only has 1 endpoint for Pixel data transfer
 		epAddr = pdx->hEP[0];
-		dbg("ST133 Frame #%d: EP=2",frameInfo );
+		dbg("ST133 Frame #%d: EP=2",f );
 	}
 	dbg("UserAddress = %p", io->pData );
 
 	buf_size = min((int)numbytes, MAX_BUFFER_SIZE);
-	numurb = ((int)numbytes / buf_size);
-	size_last = ((int)numbytes % buf_size);
+	numurb = numbytes / buf_size;
+	size_last = numbytes % buf_size;
 	if (size_last)
 		numurb++;
-	dbg("numbytes = %d => %d urbs of %d bytes", (int)numbytes, numurb, buf_size);
-	pdx->sgEntries[frameInfo] = numurb;
+	dbg("numbytes = %lu => %d urbs of %d bytes", numbytes, numurb, buf_size);
+	pdx->sgEntries[f] = numurb;
 
-	pdx->PixelUrb[frameInfo] = kmalloc( numurb * sizeof( struct urb *), GFP_KERNEL);
-	if( !pdx->PixelUrb[frameInfo] ) {
+	pdx->PixelUrb[f] = kzalloc(numurb * sizeof(struct urb *), GFP_KERNEL);
+	if (!pdx->PixelUrb[f]) {
 		dbg( "Can't Allocate Memory for Urb" );
 		return -ENOMEM;
 	}
 
-	pdx->pendedPixelUrbs[frameInfo] = kmalloc(numurb * ( sizeof( char ) ), GFP_KERNEL );
-	if( !pdx->pendedPixelUrbs[frameInfo] ) {
+	pdx->pendedPixelUrbs[f] = kzalloc(numurb * sizeof(char), GFP_KERNEL);
+	if (!pdx->pendedPixelUrbs[f]) {
 		dbg( "Can't allocate Memory for pendedPixelUrbs" );
 		retval = -ENOMEM;
 		goto error;
 	}
 
-	for (i=0; i < numurb; i++) {
+	for (i = 0; i < numurb; i++) {
 		int size = buf_size;
-		if (size_last && i == (numurb -1))
+		if (size_last && (i == (numurb-1)))
 			size = size_last;
 
 		urb = usb_alloc_urb( 0, GFP_KERNEL );
@@ -581,6 +580,7 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 			retval = -ENOMEM;
 			goto error;
 		}
+		pdx->PixelUrb[f][i] = urb;
 
 		buf = usb_alloc_coherent(pdx->udev, size, GFP_KERNEL, &urb->transfer_dma);
 		if (!buf) {
@@ -589,31 +589,40 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 		}
 
 		usb_fill_bulk_urb(urb, pdx->udev, epAddr, buf, size,
-						  piusb_read_pixel_callback, (void *)pdx);
+				  piusb_read_pixel_callback, (void *)pdx);
 		urb->transfer_flags = URB_NO_TRANSFER_DMA_MAP;
-		pdx->PixelUrb[frameInfo][i] = urb;
 	}
 
-	for (i=0; i < numurb; i++) {
-		err = usb_submit_urb( pdx->PixelUrb[frameInfo][i], GFP_KERNEL );
-		if (err) {
-			dbg( "submit urb for entry %d error = %d", i, err);
-			pdx->pendedPixelUrbs[frameInfo][i] = 0;
-			retval = err;
+	for (i = 0; i < numurb; i++) {
+		retval = usb_submit_urb( pdx->PixelUrb[f][i], GFP_KERNEL );
+		if (retval) {
+			dbg( "submit urb for entry %d error = %d", i, retval);
+			pdx->pendedPixelUrbs[f][i] = 0;
 			goto error_kill;
 		}
 
-		pdx->pendedPixelUrbs[frameInfo][i] = 1;
+		pdx->pendedPixelUrbs[f][i] = 1;
 	}
 	return 0;
 
 error_kill:
-error:
-	// FIXME: need to unfree every single urb already allocated
-	if (urb) {
-		usb_free_coherent(pdx->udev, numbytes, buf, urb->transfer_dma);
-		usb_free_urb(urb);
+	for (i = 0; i < numurb; i++) {
+		if (pdx->pendedPixelUrbs[f][i])
+			usb_kill_urb(pdx->PixelUrb[f][i]);
 	}
+error:
+	for (i = 0; i < numurb; i++) {
+		urb = pdx->PixelUrb[f][i];
+		if (urb)
+			usb_free_coherent(pdx->udev, urb->transfer_buffer_length,
+					urb->transfer_buffer, urb->transfer_dma);
+		usb_free_urb(urb);
+
+	}
+	kfree(pdx->pendedPixelUrbs[f]);
+	pdx->pendedPixelUrbs[f] = NULL;
+	kfree(pdx->PixelUrb[f]);
+	pdx->PixelUrb[f] = NULL;
 	return retval;
 }
 
