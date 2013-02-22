@@ -81,38 +81,47 @@ static void piusb_write_bulk_callback(struct urb *urb)
 
 /**
  * Called from user-space (via the IOCTL) to send some data to one of the output
- * bulk endpoints (eg: 1 or 8).
+ * bulk endpoints (eg: on the PIXIS 1 or 8). It asynchronous.
+ * Returns the number of bytes written (sent).
  */
 int piusb_write_bulk(ioctl_struct *io, unsigned char *uBuf, int len, struct device_extension *pdx)
 {
 	struct urb *urb = NULL;
-	int err = 0;
+	int retval = 0;
 	unsigned char *kbuf = NULL;
 
-	// TODO: return the number of bytes submitted or the error?
 	urb = usb_alloc_urb( 0, GFP_KERNEL );
-	if( urb != NULL ) {
-		kbuf = kmalloc(len, GFP_KERNEL);
-		if (kbuf == NULL) {
-			dev_err(&pdx->udev->dev, "buffer_alloc failed\n");
-			return -ENOMEM;
-		}
-		if (copy_from_user(kbuf, uBuf, len)) {
-			dev_err(&pdx->udev->dev, "copy_from_user failed\n");
-			return -EFAULT;
-		}
-
-		usb_fill_bulk_urb( urb, pdx->udev, pdx->hEP[io->endpoint], kbuf, len, piusb_write_bulk_callback, pdx );
-
-		err = usb_submit_urb( urb, GFP_KERNEL );
-		if (err) {
-			dev_err(&pdx->udev->dev, "WRITE ERROR:submit urb error = %d\n", err);
-		}
-		pr_info("sending %d bytes to pipe %d\n", len, io->endpoint);
-		pdx->pendingWrite = 1;
-		usb_free_urb( urb );
+	if (urb == NULL) {
+		retval = -ENOMEM;
+		goto done;
 	}
-	return -EINPROGRESS;
+
+	kbuf = kmalloc(len, GFP_KERNEL);
+	if (kbuf == NULL) {
+		dev_err(&pdx->udev->dev, "buffer_alloc failed\n");
+		retval = -ENOMEM;
+		goto done;
+	}
+	if (copy_from_user(kbuf, uBuf, len)) {
+		dev_err(&pdx->udev->dev, "copy_from_user failed\n");
+		retval = -EFAULT;
+		goto done;
+	}
+
+	usb_fill_bulk_urb( urb, pdx->udev, pdx->hEP[io->endpoint], kbuf, len, piusb_write_bulk_callback, pdx );
+
+	retval = usb_submit_urb(urb, GFP_KERNEL);
+	if (retval) {
+		dev_err(&pdx->udev->dev, "WRITE ERROR: submit urb error = %d\n", retval);
+		goto done;
+	}
+	pr_info("sending %d bytes to pipe %d\n", len, io->endpoint);
+	pdx->pendingWrite = 1;
+	retval = len;
+
+done:
+	usb_free_urb(urb);
+	return retval;
 }
 
 
@@ -783,7 +792,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case PIUSB_WRITEPIPE:
-		dbg("PIUSB_WRITEPIPE");
+		dbg("WRITEPIPE");
 		if (copy_from_user(&ctrl, (void __user*)arg, sizeof(ioctl_struct))) {
 			pr_info("copy_from_user failed\n");
 			retval = -EFAULT;
@@ -795,8 +804,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 			goto done;
 		}
 		// TODO: shall we care about pendingWrite?
-		piusb_write_bulk(&ctrl, ctrl.pData, ctrl.numbytes, pdx);
-		retval = ctrl.numbytes;
+		retval = piusb_write_bulk(&ctrl, ctrl.pData, ctrl.numbytes, pdx);
 		break;
 
 	case PIUSB_USERBUFFER:
@@ -820,7 +828,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 			retval = -EFAULT;
 			goto done;
 		}
-		dbg("PIUSB_READPIPE %d", ctrl.endpoint);
+		dbg("READPIPE %d", ctrl.endpoint);
 
 		/* Depending on the camera, endpoints have different meanings */
 		if (pdx->iama == PIXIS_PID) {
@@ -870,7 +878,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		}
 		pdx->frameSize = ctrl.numbytes;
 		pdx->num_frames = ctrl.numFrames;
-		dbg("PIUSB_SETFRAMESIZE to %dx%lu", ctrl.numFrames, ctrl.numbytes);
+		dbg("SETFRAMESIZE to %dx%lu", ctrl.numFrames, ctrl.numbytes);
 
 		/* the checks shouldn't be necessary, but it makes sure there is no leak */
 		if( !pdx->sgl )
