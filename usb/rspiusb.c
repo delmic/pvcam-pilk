@@ -184,6 +184,9 @@ int UnMapUserBuffer( struct device_extension *pdx )
 	int i, k;
 	unsigned int epAddr;
 
+	if (!pdx->PixelUrb)
+		return -EINVAL; // not initialized yet
+
 	for( k = 0; k < pdx->num_frames; k++ ) {
 		dbg("Killing Urbs for Frame %d", k );
 		for( i = 0; i < pdx->sgEntries[k]; i++ ) {
@@ -257,6 +260,9 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 	frameInfo = io->numFrames;
 	uaddr = (unsigned long) io->pData;
 	numbytes = io->numbytes;
+
+	if (!pdx->PixelUrb)
+		return -EINVAL; // not initialized yet
  
 	if( pdx->iama == PIXIS_PID ) { //if so, which EP should we map this frame to
 		if( frameInfo % 2 )//check to see if this should use EP4(PONG)
@@ -424,7 +430,7 @@ static int get_pixel_data(struct device_extension *pdx)
 	for (i = 0; i < pdx->maplist_numPagesMapped[pdx->active_frame]; i++)
 		SetPageDirty(sg_page(&pdx->sgl[pdx->active_frame][i]));
 
-	pdx->active_frame = ((pdx->active_frame + 1) % pdx->num_frames);
+	pdx->active_frame = (pdx->active_frame + 1) % pdx->num_frames;
 
 	return numbytes;
 }
@@ -470,6 +476,9 @@ int UnMapUserBuffer( struct device_extension *pdx )
 	int i = 0;
 	int k = 0;
 	unsigned int epAddr;
+
+	if (!pdx->PixelUrb)
+		return -EINVAL; // not initialized yet
 
 	for( k = 0; k < pdx->num_frames; k++ ) {
 		for (i = 0; i < pdx->sgEntries[k]; i++) {
@@ -534,6 +543,9 @@ int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 	void *buf = NULL;
 	unsigned int buf_size, size_last;
 	int numurb;
+
+	if (!pdx->PixelUrb)
+		return -EINVAL; // not initialized yet
 
 	pdx->user_buffer[f] = io->pData; // address of the user buffer, to copy it back
 
@@ -649,7 +661,7 @@ static int get_pixel_data(struct device_extension *pdx)
 			dbg("failed to copy pixel data of urb %d to user", i);
 		to_buf += length;
 
-		/* try to resubmitting the urb (will fail if buffer is unmapped */
+		/* try to resubmitting the urb (will fail if buffer is unmapped) */
 		err = usb_submit_urb(urbs[i], GFP_KERNEL);
 		if (err && err != -EPERM) {
 			errCnt++;
@@ -661,7 +673,7 @@ static int get_pixel_data(struct device_extension *pdx)
 			dbg("submit urb cancelled");
 	}
 
-	pdx->active_frame = ((pdx->active_frame + 1) % pdx->num_frames);
+	pdx->active_frame = (pdx->active_frame + 1) % pdx->num_frames;
 	dbg("return %lu bytes of data", numbytes);
 	return numbytes;
 }
@@ -885,9 +897,25 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 			retval = -EINVAL;
 			goto done;
 		}
+		dbg("SETFRAMESIZE to %dx%lu", ctrl.numFrames, ctrl.numbytes);
+
+		if ((pdx->iama == PIXIS_PID) && (ctrl.numFrames % 2)) {
+			/*
+			 * The PIXIS uses a ping-pong scheme, which means we
+			 * need to have a even number of buffer (or we would
+			 * need to change the endpoint number every time we
+			 * resubmit the URBs).
+			 */
+			// TODO: allow odd number, and update pipe when resubmitting URB
+			// might need to look out for Set Vendor Command = f0.
+			dev_warn(&pdx->udev->dev, "PIXIS needs an even number of "
+				 "frame buffers, it will not work past %d frames\n",
+				 ctrl.numFrames);
+		}
+
 		pdx->frameSize = ctrl.numbytes;
 		pdx->num_frames = ctrl.numFrames;
-		dbg("SETFRAMESIZE to %dx%lu", ctrl.numFrames, ctrl.numbytes);
+		pdx->active_frame = 0;
 
 		/* the checks shouldn't be necessary, but it makes sure there is no leak */
 		if( !pdx->sgl )
