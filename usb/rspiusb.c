@@ -964,7 +964,7 @@ static int piusb_open(struct inode *inode, struct file *file)
 	subminor = iminor(inode);
 	interface = usb_find_interface (&piusb_driver, subminor);
 	if (!interface) {
-		err ("%s - error, can't find device for minor %d", __FUNCTION__, subminor);
+		pr_err("%s - error, can't find device for minor %d", __func__, subminor);
 		retval = -ENODEV;
 		goto exit_no_device;
 	}
