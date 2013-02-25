@@ -6,8 +6,9 @@ Requirements
 
 	Pvcam library - version 2.7.1.6 or later required
 	Download from ftp site: ftp://ftp.piacton.com/Public/Software/Official/Linux/
+	This driver has been tested to work on Linux kernel 3.2 and 3.5, on x86 32-bit.
+	It is not supported on x86 64-bit.
 
-*NOTE - if there is a previously installed version, remove it first before continuing*
 
 Installation Instructions
 
@@ -22,14 +23,13 @@ Installation Instructions
 	The default group name is 'video'.  Change 'video' to the appropriate group name, save the file,
 	and either reboot or run "sudo udevadm control --reload-rules".
 
-
 Debian package generation
-It requires to follow the typical dpkg workflow. In particular, you must ensure
-to have a GPG key and add an entry to the changelog on your name. The usb/
-directory should be renamed pvcam-pilk-usb-VERSION/. Then go to this directory
-and type: 
-dpkg-buildpackage -rfakeroot
 
-It will create a DKMS package, which ensures that the module is recompiled 
-everytime the kernel is updated.
-
+	It requires to follow the typical dpkg workflow. In particular, you must ensure
+	to have a GPG key and add an entry to the changelog on your name. The usb/
+	directory should be renamed pvcam-pilk-usb-VERSION/. Then go to this directory
+	and type: 
+	dpkg-buildpackage -rfakeroot
+	
+	It will create a DKMS package, which ensures that the module is recompiled 
+	everytime the kernel is updated.
