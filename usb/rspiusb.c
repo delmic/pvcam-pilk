@@ -115,7 +115,7 @@ int piusb_write_bulk(ioctl_struct *io, unsigned char *uBuf, int len, struct devi
 		dev_err(&pdx->udev->dev, "WRITE ERROR: submit urb error = %d\n", retval);
 		goto done;
 	}
-	pr_info("sending %d bytes to pipe %d\n", len, io->endpoint);
+	dbg("sending %d bytes to pipe %d\n", len, io->endpoint);
 	pdx->pendingWrite = 1;
 	retval = len;
 
@@ -728,6 +728,9 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
 	return ctrl->numbytes;
 }
 
+
+// TODO: add a piusb_compat_ioctl to support 32 bits calls on 64 bits. It's
+// mainly about reading/writing the ioctl_struct in 32 bits.
 static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct device_extension *pdx;
