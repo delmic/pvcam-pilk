@@ -449,6 +449,7 @@ static void piusb_read_pixel_callback ( struct urb *urb )
 		dbg( "Bytes received before problem occurred = %d", pdx->bulk_in_byte_trk );
 		dbg( "Urb Idx = %d", pdx->urbIdx );
 		pdx->pendedPixelUrbs[pdx->frameIdx][pdx->urbIdx] = 0;
+		pdx->gotPixelData = -EPIPE; // tell there is no hope
 		return;
 	}
 
@@ -647,6 +648,17 @@ static int get_pixel_data(struct device_extension *pdx)
 
 	if (!pdx->gotPixelData)
 		return 0; /* not yet */
+	else if (pdx->gotPixelData < 0) {
+		err = pdx->gotPixelData;
+		pdx->gotPixelData = 0;
+		// We should return the error number, but it seems the libpvcam
+		// thinks it's just a negative length to read. So instead claim
+		// we got all
+		//return err; /* error */
+		numbytes = pdx->frameSize;
+		dbg("pretending to return %lu bytes of data after err %d", numbytes, err);
+		return numbytes;
+	}
 
 	pdx->gotPixelData = 0;
 	numbytes = pdx->bulk_in_size_returned;
@@ -747,6 +759,8 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 	if (!pdx->present) {
 		dbg( "No Device Present\n" );
 		retval = -ENODEV;
+		if (cmd == PIUSB_READPIPE)
+			retval = 0; // libpvcam will crash if we report an error
 		goto done;
 	}
 
