@@ -1,3 +1,9 @@
+pvcam-pilk-usb-dkms (1.0.3-1ubuntu1) precise; urgency=low
+
+  * Fix dkms and udev config files.
+
+ -- Éric Piel <piel@delmic.com>  Fri, 01 Mar 2013 12:11:11 +0100
+
 pvcam-pilk-usb-dkms (1.0.3-1) unstable; urgency=low
 
   * Initial release

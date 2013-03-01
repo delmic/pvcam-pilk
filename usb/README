@@ -26,10 +26,13 @@ Installation Instructions
 Debian package generation
 
 	It requires to follow the typical dpkg workflow. In particular, you must ensure
-	to have a GPG key and add an entry to the changelog on your name. The usb/
-	directory should be renamed pvcam-pilk-usb-VERSION/. Then go to this directory
-	and type: 
+	to have a GPG key and add an entry to the changelog on your name (use "dch -i").
+	For example do:
+	cd usb/
+	dch -i
 	dpkg-buildpackage -rfakeroot
+
+	The .deb package is created in ../ .
 	
 	It will create a DKMS package, which ensures that the module is recompiled 
 	everytime the kernel is updated.
