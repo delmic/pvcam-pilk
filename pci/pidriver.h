@@ -74,7 +74,8 @@
 		DWORD fifo_full;
 	};
 	struct extension {
-	
+		struct mutex mutex; /* acquire it before accessing the device */
+
 		unsigned long base_address0;
 		unsigned long base_address1;
 		unsigned long base_address2;
@@ -131,11 +132,6 @@
 	#define IOCTL_PCI_GET_IRQS          _IOWR(MAJOR_NUM, 10, int)
 	
 
-	
-	
-	irqreturn_t princeton_handle_irq(  int irq, 
-							void *devicex, 
-							struct pt_regs *regs );
 	
 	
 	#endif

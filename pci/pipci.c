@@ -40,7 +40,6 @@
 ***     --------------------------------------------       ***
 **************************************************************
 *************************************************************/
-//	#define __KERNEL__
 	
 	#include <linux/init.h>
 	#include <linux/module.h>
@@ -50,9 +49,10 @@
 	#include <linux/poll.h>
 	#include <linux/fs.h>
   	#include <linux/interrupt.h>
-
+	#include <linux/sched.h>
 	#include <asm/io.h>
-
+	#include <asm/uaccess.h>
+	#include "pidriver.h"
 
 	#define DRV_VERSION "2.0.1"
 	#define DRV_RELDATE "27 August 2004"
@@ -60,13 +60,7 @@
 	#ifndef KERNEL_VERSION
 	#define KERNEL_VERSION(a,b,c) ((a)*65536+(b)*256+(c))
 	#endif
-	
-//	#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,2,0)
-	#include <asm/uaccess.h>
 
-//	#endif
-	
-	#include "pidriver.h"
 
 	/* Global Structure Holds State of Card for all devices */
 	static struct extension device[PI_MAX_CARDS];
@@ -80,7 +74,7 @@
 	#define BYTES_MB 1048576
 		
 	MODULE_AUTHOR("Princeton Instruments");
-	MODULE_DESCRIPTION("PCI Device Driver for Linux\n\t\tVERSION "DRV_VERSION " \t" DRV_RELDATE);
+	MODULE_DESCRIPTION("PCI Device Driver for TAXI board");
 	MODULE_ALIAS( "PIPCI" );	
 	module_param( DMA_MB, int, 0 );
 	module_param( IMAGE_ORDER, int, 0 );
@@ -111,14 +105,14 @@
 								
 	static ssize_t  princeton_write( struct file *fp, const char *buffer, size_t length, loff_t *offset);						 
 						 		
-	static int 	princeton_ioctl( struct inode *inode, struct file *fp, unsigned int ioctl_command,
+	static long 	princeton_ioctl( struct file *fp, unsigned int ioctl_command,
 					 unsigned long ioctl_param);							 			
 
- 	struct file_operations functions = {	
+ 	static struct file_operations functions = {
 		.owner   = THIS_MODULE,
 		.read    = princeton_read,
 		.write   = princeton_write,
-		.ioctl   = princeton_ioctl,
+		.unlocked_ioctl = princeton_ioctl,
 		.open    = princeton_open,
 		.release = princeton_release,
 	};			
@@ -144,7 +138,7 @@
 	
 	int princeton_transfer_to_user( void *user_object, struct extension *devicex );
 	
-	irqreturn_t princeton_handle_irq(int irq, void *devicex, struct pt_regs *regs);	
+	irqreturn_t princeton_handle_irq(int irq, void *devicex);
 	
 	int princeton_get_irqs( void *user_object, struct extension *devicex );
 	
@@ -242,8 +236,9 @@
 		unsigned short command;	
 		unsigned long flags;	
 		
-		while (( dev = pci_find_device(PI_PCI_VENDOR, PI_PCI_DEVICE, dev) ) != 0 )
-		{		
+//		while (( dev = pci_find_device(PI_PCI_VENDOR, PI_PCI_DEVICE, dev) ) != 0 )
+		while ((dev = pci_get_device(PI_PCI_VENDOR, PI_PCI_DEVICE, dev)))
+		{
            	
 			pci_read_config_word( dev, PCI_COMMAND, &command );
 			pci_read_config_word( dev, PCI_BASE_ADDRESS_0, (unsigned short *)&device[cards_found].base_address0 );
@@ -274,7 +269,7 @@
 			printk("KERN_INFO Base Address 1 0x%x\n",(unsigned int)device[0].base_address1 );
 			printk("KERN_INFO Base Address 2 0x%x\n",(unsigned int)device[0].base_address2 );
 
-			flags = SA_INTERRUPT | ( ( SHARE ) ? SA_SHIRQ : 0 );
+			flags = (SHARE) ? IRQF_SHARED : 0;
 			status = request_irq( dev->irq, princeton_handle_irq, flags, DEVICE_NAME, &device[cards_found]); 
 			
 			command |= PCI_COMMAND_MASTER;	
@@ -334,6 +329,7 @@
 			return -EBUSY;
 			
 		fp->private_data = (void *)(&device[card]);
+		mutex_init(&device[card].mutex);
 		
 		device[card].state = STATE_OPEN;
 
@@ -367,8 +363,7 @@
 	*
 	*
 	******************************************************************************/
-	static int princeton_ioctl(	struct inode *inode, 
-		 					struct file *fp,
+	static long princeton_ioctl (struct file *fp,
 						   	unsigned int ioctl_command,
 						   	unsigned long ioctl_param)
 	{
@@ -376,6 +371,7 @@
 		struct extension *devicex;
 		status = PIDD_SUCCESS;						
 		devicex = (struct extension *)(fp->private_data);
+		mutex_lock(&devicex->mutex);
 
 		switch ( ioctl_command )
 		{
@@ -407,8 +403,11 @@
 			case IOCTL_PCI_GET_IRQS:
 				princeton_get_irqs( (void*)ioctl_param, devicex );
 				break;
+			default:
+				status = -ENOTTY;
 		}
 		
+		mutex_unlock(&devicex->mutex);
 		return status;
 	}
 	
@@ -814,7 +813,7 @@
 
 	#define MAX_VIOLATIONS 10
 
-	irqreturn_t princeton_handle_irq(int irq, void *devicex, struct pt_regs *regs)
+	irqreturn_t princeton_handle_irq(int irq, void *devicex)
 	{
 	unsigned long  tmp_stat;
 	unsigned short rid_stat, rcd_stat, ctrl_reg;
