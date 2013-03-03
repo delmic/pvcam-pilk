@@ -169,18 +169,21 @@
 		} 
 		else
 			printk( "KERN_INFO Registered Character Driver %i\n", status);
-		if ( 1 )//pcibios_present() )  //function no longer supported.  need a fix
+		status = 0;
+		if ( 1 )//pcibios_present() )  //FIXME function no longer supported.  need a fix
 		{
 			printk("KERN_INFO PCI Bios Found\n");
 			printk("KERN_INFO Searching For Princeton Card\n");
 			{
 				devices = princeton_find_devices(&error);
 				if ( !devices )
-					status = PIDD_FAILURE;
+					status = -ENODEV;
 			}
 		}			
-		else
-			printk("KERN_INFO PCI Bios Not Detected\n");		
+		else {
+			printk("KERN_INFO PCI Bios Not Detected\n");
+			status = -ENODEV;
+		}
 			
 		switch (error)
 		{
