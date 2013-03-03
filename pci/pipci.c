@@ -122,7 +122,7 @@
 	
 	/*------------LOCAL FUNCTION CALLS-----------------------*/
 
-	int  princeton_find_devices(unsigned int *error);
+	int  princeton_find_devices(void);
 
 	int princeton_output(	void *io_object, struct extension *devicex, unsigned int type);
 
@@ -156,47 +156,26 @@
 	******************************************************************************/
 	static int initialize(void)
 	{
-		int status;
-		unsigned int error;
+		int err;
 		int devices;
 		
-		status = register_chrdev(MAJOR_NUM, DEVICE_NAME, &functions );
-				
-		if ( status < 0 ) 
-		{
-			printk( "KERN_INFO Failed To Register Character Driver\n");
-			return status;
+		// TODO: use, newer, cdev interface
+		err = register_chrdev(MAJOR_NUM, DEVICE_NAME, &functions );
+		if ( err < 0 ) {
+			printk( KERN_INFO "Failed To Register Character Driver\n");
+			return err;
 		} 
 		else
-			printk( "KERN_INFO Registered Character Driver %i\n", status);
-		status = 0;
-		if ( 1 )//pcibios_present() )  //FIXME function no longer supported.  need a fix
-		{
-			printk("KERN_INFO PCI Bios Found\n");
-			printk("KERN_INFO Searching For Princeton Card\n");
-			{
-				devices = princeton_find_devices(&error);
-				if ( !devices )
-					status = -ENODEV;
-			}
-		}			
-		else {
-			printk("KERN_INFO PCI Bios Not Detected\n");
-			status = -ENODEV;
-		}
+			printk( KERN_INFO "Registered Character Driver %i\n", err);
+
+		printk(KERN_INFO "Searching For Princeton Card\n");
+		devices = princeton_find_devices();
+		if (devices == 0)
+			return -ENODEV;
 			
-		switch (error)
-		{
-			case ERROR_IRQ:
-				printk("KERN_INFO Failed to hook interrupt\n");
-				break;
-			case ERROR_NONE:
-				break;
-		}
-		
+		printk(KERN_INFO "Found %i cards\n", devices);
 		dmanodeshead = (struct pi_dma_node*)(__get_free_pages(GFP_KERNEL, 1));
-		printk("KERN_INFO Status = %i\n",status);
-		return status;
+		return 0;
 	}
 	
 	/******************************************************************************
@@ -232,14 +211,13 @@
 	*
 	*
 	******************************************************************************/
-	int princeton_find_devices(unsigned int *error)
+	int princeton_find_devices(void)
 	{				
 		int status = 0;
 		struct pci_dev *dev = NULL;
 		unsigned short command;	
 		unsigned long flags;	
 		
-//		while (( dev = pci_find_device(PI_PCI_VENDOR, PI_PCI_DEVICE, dev) ) != 0 )
 		while ((dev = pci_get_device(PI_PCI_VENDOR, PI_PCI_DEVICE, dev)))
 		{
            	
@@ -283,7 +261,6 @@
 			cards_found++;
 		}			
 		printk("KERN_INFO Number of Devices Found %i\n", cards_found);
-		*error = 0;
 		return (cards_found);
 	}
 	

@@ -11,10 +11,6 @@
 	#define TABLE_SIZE		8192		/* scatter gather table for 128 meg images  */
 								/* (TABLE_PAGES * PAGE_SIZE) / 8 			*/
 	
-	#define ERROR_NONE		0x00
-	#define ERROR_IRQ		0x01
-	#define ERROR_ALLOCATE		0x02
-	
 	#define PI_PCI_VENDOR		0x10e8
 	#define PI_PCI_DEVICE		0x801d
 	#define PI_MAX_CARDS 		0x0c
