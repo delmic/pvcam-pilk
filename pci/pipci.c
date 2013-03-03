@@ -187,7 +187,7 @@
 	******************************************************************************/
 	static void cleanup(void)
 	{
-		int status,i;				
+		int i;
 
 		if ( cards_found > 0 )
 			for ( i=0; i<cards_found; i++ )
@@ -199,7 +199,7 @@
 		if ( dmanodeshead )
 			free_pages((int)dmanodeshead, 1);						
 		else
-			printk("KERN_INFO No DMA nodes\n");
+			printk(KERN_INFO "No DMA nodes\n");
 
 		unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
 	}
@@ -242,13 +242,13 @@
 			if( IRQ != 99 )
 				dev->irq = IRQ;
 			device[cards_found].irq 	= dev->irq;		
-			printk("KERN_INFO Using IRQ %d\n", dev->irq );
+			printk(KERN_INFO "Using IRQ %d\n", dev->irq );
 			device[cards_found].bufferflag	= 0;
 			device[cards_found].dmainfo.numberofentries = 0;
 
-			printk("KERN_INFO Base Address 0 0x%x\n",(unsigned int)device[0].base_address0 );
-			printk("KERN_INFO Base Address 1 0x%x\n",(unsigned int)device[0].base_address1 );
-			printk("KERN_INFO Base Address 2 0x%x\n",(unsigned int)device[0].base_address2 );
+			printk(KERN_INFO "Base Address 0 0x%lx\n",device[0].base_address0 );
+			printk(KERN_INFO "Base Address 1 0x%lx\n",device[0].base_address1 );
+			printk(KERN_INFO "Base Address 2 0x%lx\n",device[0].base_address2 );
 
 			flags = (SHARE) ? IRQF_SHARED : 0;
 			status = request_irq( dev->irq, princeton_handle_irq, flags, DEVICE_NAME, &device[cards_found]); 
@@ -260,7 +260,7 @@
 			princeton_do_scatter_boot( BYTES_MB*DMA_MB, &device[cards_found] );
 			cards_found++;
 		}			
-		printk("KERN_INFO Number of Devices Found %i\n", cards_found);
+		printk(KERN_INFO "Number of Devices Found %i\n", cards_found);
 		return (cards_found);
 	}
 	
@@ -427,13 +427,13 @@
 			switch(type)
 			{		
 				case IOCTL_PCI_WRITE_BYTE:
-					writeb( output.data.byte_data, output.port );				
+					writeb( output.data.byte_data, (void *)output.port );
 					break;
 				case IOCTL_PCI_WRITE_WORD:
-					writew( output.data.word_data, output.port );
+					writew( output.data.word_data, (void *)output.port );
 					break;
 				case IOCTL_PCI_WRITE_DWORD:
-					writel( output.data.dword_data, output.port );
+					writel( output.data.dword_data, (void *)output.port );
 					break;		
 			}
 		}		
@@ -476,13 +476,13 @@
 			switch (type)
 			{
 				case IOCTL_PCI_READ_BYTE:
-					input.data.byte_data  = readb( input.port );
+					input.data.byte_data  = readb( (void *)input.port );
 					break;
 				case IOCTL_PCI_READ_WORD:
-					input.data.word_data  = readw( input.port );
+					input.data.word_data  = readw( (void *)input.port );
 					break;
 				case IOCTL_PCI_READ_DWORD:
-					input.data.dword_data = readl( input.port );
+					input.data.dword_data = readl( (void *)input.port );
 					break;		
 			}
 		}
@@ -690,7 +690,7 @@
 			} 
 			else 
 			{				
-				printk("KERN_INFO Image allocation failed\n");
+				printk(KERN_INFO "Image allocation failed\n");
 				breakout = 1;
 			}
 			if (breakout) break;
@@ -707,7 +707,7 @@
 */			
 		devicex->dmainfo.numberofentries = i;
 
-		printk( "KERN_INFO Nodes allocated %i\n", i );
+		printk( KERN_INFO "Nodes allocated %i\n", i );
 		
 		devicex->bufferflag = 1;
 		
@@ -809,7 +809,7 @@
 
     /* Clear AMCC IRQ source and disable AMCC Interrupts */
 	if ( driverx->mem_mapped == 1 )
-		tmp_stat = readl( driverx->base_address0 + INTCR );	
+		tmp_stat = readl((void *)(driverx->base_address0 + INTCR));
 	else		
 		tmp_stat = inl( driverx->base_address0 + INTCR );
 	
@@ -817,20 +817,20 @@
 	{
 		
 		if ( driverx->mem_mapped == 1 )
-			writel( tmp_stat, driverx->base_address0 + INTCR);	
+			writel( tmp_stat, (void *)(driverx->base_address0 + INTCR));
 		else		
 			outl( tmp_stat, driverx->base_address0 + INTCR);
 		/* Read Taxi EPLD IRQ Status */
 	
 		if ( driverx->mem_mapped == 1 )
-			status = (unsigned char)readl( driverx->base_address2 + IRQ_RD_PCI );	
+			status = (unsigned char)readl( (void *)(driverx->base_address2 + IRQ_RD_PCI));
 		else	
 			status = (unsigned char)inl( driverx->base_address2 + IRQ_RD_PCI );
    
 		while (status)                    /* stay in loop until all ints serviced */
 		{
 	    	if ( driverx->mem_mapped == 1 )
-		 		writel( status, driverx->base_address2 + IRQ_CLR_WR_PCI );	
+		 		writel( status, (void *)(driverx->base_address2 + IRQ_CLR_WR_PCI));
 			else		
 		 		outl( status, driverx->base_address2 + IRQ_CLR_WR_PCI );
 	
@@ -838,7 +838,7 @@
 			{                                /* read data from TAXI EPLD RID regs */
 
 				if ( driverx->mem_mapped == 1 )	
-					rid_stat = (unsigned short)readl( driverx->base_address2 + RID_RD_PCI );
+					rid_stat = (unsigned short)readl((void *)( driverx->base_address2 + RID_RD_PCI));
 				else		
 					rid_stat = (unsigned short)inl( driverx->base_address2 + RID_RD_PCI );
 
@@ -871,7 +871,7 @@
 			if ( status & I_RCD1 )           /* controller register data received */
 			{                                /* read data from TAXI EPLD RCD regs */
 				if ( driverx->mem_mapped == 1 )
-					rcd_stat = (unsigned short)readl( driverx->base_address2 + RCD_RD_PCI );	
+					rcd_stat = (unsigned short)readl( (void *) (driverx->base_address2 + RCD_RD_PCI) );
 				else		
 					rcd_stat = (unsigned short)inl( driverx->base_address2 + RCD_RD_PCI );
 			}
@@ -881,9 +881,9 @@
 
 				if ( driverx->mem_mapped == 1 )
 				{
-					ctrl_reg = readl( driverx->base_address2 ); /* get taxi ctrl reg val */			
-					writel( ctrl_reg & (~RCV_CLR), driverx->base_address2 );
-					writel( ctrl_reg |   RCV_CLR,  driverx->base_address2 );
+					ctrl_reg = readl( (void *)driverx->base_address2 ); /* get taxi ctrl reg val */
+					writel( ctrl_reg & (~RCV_CLR), (void *)driverx->base_address2 );
+					writel( ctrl_reg |   RCV_CLR,  (void *)driverx->base_address2 );
 				}	
 				else		
 				{
@@ -896,7 +896,7 @@
 				if ( driverx->irqs.violations > MAX_VIOLATIONS )
 				{
 					if ( driverx->mem_mapped == 1 )
-						writel( ctrl_reg & (~IRQ_EN), driverx->base_address2 );								
+						writel( ctrl_reg & (~IRQ_EN), (void *)driverx->base_address2 );
 					else				
 						outl( ctrl_reg & (~IRQ_EN), driverx->base_address2 );		
 					driverx->irqs.error_occurred = 1;
@@ -911,14 +911,14 @@
 			}
 
 			if ( driverx->mem_mapped == 1 )
-				status = (unsigned char)readl( driverx->base_address2 + IRQ_RD_PCI );	
+				status = (unsigned char)readl( (void *) (driverx->base_address2 + IRQ_RD_PCI) );
 			else		
 				status = (unsigned char)inl( driverx->base_address2 + IRQ_RD_PCI );
 
 		} /* end while */
 	
 		if ( driverx->mem_mapped == 1 )
-			tmp_stat = readl( driverx->base_address0 + INTCR );
+			tmp_stat = readl( (void *)(driverx->base_address0 + INTCR) );
 		else		
 			tmp_stat = inl( driverx->base_address0 + INTCR );
 
