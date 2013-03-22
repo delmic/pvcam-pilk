@@ -668,6 +668,9 @@ static int get_pixel_data(struct device_extension *pdx)
 		u16 *buf = (urbs[i]->transfer_buffer);
 		unsigned int length = urbs[i]->actual_length;
 
+		if (!access_ok(VERIFY_WRITE, (void __user *)to_buf, length))
+			return -EFAULT;
+
 		dbg("Got pixel data of urb %d = %x", i, buf[length/(i+1)]);
 		if (copy_to_user(to_buf, buf, length))
 			dbg("failed to copy pixel data of urb %d to user", i);
