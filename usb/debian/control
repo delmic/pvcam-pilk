@@ -1,4 +1,4 @@
-Source: pvcam-pilk-usb-dkms
+Source: pvcam-pilk-usb
 Section: contrib/kernel
 Priority: extra
 Maintainer: Éric Piel <piel@delmic.com>

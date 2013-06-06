@@ -1,3 +1,10 @@
+pvcam-pilk-usb (1.0.3-1ubuntu2) precise; urgency=low
+
+  * rename source package to pvcam-pilk-usb
+  * check that the pointer given by the user is actually correct before copying data
+
+ -- Éric Piel (Delmic) <piel@delmic.com>  Thu, 06 Jun 2013 18:39:55 +0200
+
 pvcam-pilk-usb-dkms (1.0.3-1ubuntu1) precise; urgency=low
 
   * Fix dkms and udev config files.
