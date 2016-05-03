@@ -17,6 +17,7 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <linux/version.h>
 #include <linux/vmalloc.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -27,7 +28,11 @@
 #include <linux/mutex.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
+#if	LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
 #include <asm/scatterlist.h>
+#else
+#include <linux/scatterlist.h>
+#endif
 #include <linux/mm.h>
 #include <linux/pci.h> //for scatterlist macros
 #include <linux/pagemap.h>
